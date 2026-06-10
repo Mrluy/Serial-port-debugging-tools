@@ -24,7 +24,7 @@ except ImportError:
 
 
 APP_TITLE = "COM/TCP/UDP调试工具"
-APP_ICON_PATH = Path("assets") / "app.ico"
+APP_ICON_PATH = Path("assets") / "app.png"
 MODE_SERIAL = "COM串口"
 MODE_TCP_CLIENT = "TCP客户端"
 MODE_TCP_SERVER = "TCP服务端"
@@ -343,7 +343,8 @@ class SerialDebugTool(tk.Tk):
         if not icon_path.exists():
             return
         try:
-            self.iconbitmap(default=str(icon_path))
+            self._window_icon = tk.PhotoImage(file=str(icon_path))
+            self.iconphoto(True, self._window_icon)
         except tk.TclError:
             pass
 

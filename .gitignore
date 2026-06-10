@@ -10,6 +10,8 @@ venv/
 
 *.log
 
+assets/*.generated.ico
+
 dist/*
 !dist/
 !dist/*.exe

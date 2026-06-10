@@ -1,15 +1,16 @@
 @echo off
 cd /d "%~dp0"
 
-python -m pip install -r requirements.txt pyinstaller
+python -m pip install -r requirements.txt pyinstaller pillow
+python tools\make_icon.py
 python -m PyInstaller ^
   --noconfirm ^
   --clean ^
   --onefile ^
   --windowed ^
   --name "COM串口调试工具" ^
-  --icon "assets\app.ico" ^
-  --add-data "assets\app.ico;assets" ^
+  --icon "assets\app.generated.ico" ^
+  --add-data "assets\app.png;assets" ^
   --hidden-import serial.tools.list_ports_windows ^
   main.py
 

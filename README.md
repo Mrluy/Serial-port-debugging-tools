@@ -37,8 +37,9 @@ python main.py
 可选步骤，双击 `build_exe.bat`，或手动执行：
 
 ```powershell
-python -m pip install -r requirements.txt pyinstaller
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name "COM串口调试工具" --icon "assets\app.ico" --add-data "assets\app.ico;assets" --hidden-import serial.tools.list_ports_windows main.py
+python -m pip install -r requirements.txt pyinstaller pillow
+python tools\make_icon.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name "COM串口调试工具" --icon "assets\app.generated.ico" --add-data "assets\app.png;assets" --hidden-import serial.tools.list_ports_windows main.py
 ```
 
 打包结果是 `dist\COM串口调试工具.exe`，目标电脑无需安装 Python 或 pyserial。
