@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import queue
 import re
+import socket
 import threading
 import time
 from datetime import datetime
@@ -20,7 +21,14 @@ except ImportError:
     HAS_PYSERIAL = False
 
 
-APP_TITLE = "本地COM串口调试工具"
+APP_TITLE = "COM/TCP/UDP调试工具"
+MODE_SERIAL = "COM串口"
+MODE_TCP_CLIENT = "TCP客户端"
+MODE_TCP_SERVER = "TCP服务端"
+MODE_UDP_CLIENT = "UDP客户端"
+MODE_UDP_SERVER = "UDP服务端"
+NETWORK_MODES = (MODE_TCP_CLIENT, MODE_TCP_SERVER, MODE_UDP_CLIENT, MODE_UDP_SERVER)
+CONNECTION_MODES = (MODE_SERIAL, *NETWORK_MODES)
 BAUD_RATES = (
     "1200",
     "2400",
@@ -68,6 +76,16 @@ def bytes_to_hex(data: bytes) -> str:
     return " ".join(f"{value:02X}" for value in data)
 
 
+def parse_port(value: str, field_name: str) -> int:
+    try:
+        port = int(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{field_name}必须是 0-65535 的数字") from exc
+    if not 0 <= port <= 65535:
+        raise ValueError(f"{field_name}必须在 0-65535 之间")
+    return port
+
+
 class SerialDebugTool(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -76,6 +94,13 @@ class SerialDebugTool(tk.Tk):
         self.minsize(980, 620)
 
         self.serial_port = None
+        self.tcp_socket: socket.socket | None = None
+        self.tcp_server_socket: socket.socket | None = None
+        self.udp_socket: socket.socket | None = None
+        self.tcp_clients: list[tuple[socket.socket, tuple[str, int]]] = []
+        self.tcp_clients_lock = threading.Lock()
+        self.udp_peer: tuple[str, int] | None = None
+        self.udp_default_peer: tuple[str, int] | None = None
         self.reader_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.rx_queue: queue.Queue[tuple[str, bytes | str]] = queue.Queue()
@@ -86,6 +111,7 @@ class SerialDebugTool(tk.Tk):
         self.sent_last = 0
         self.recv_last = 0
 
+        self.mode_var = tk.StringVar(value=MODE_SERIAL)
         self.port_var = tk.StringVar()
         self.baud_var = tk.StringVar(value="115200")
         self.data_bits_var = tk.StringVar(value="8")
@@ -95,6 +121,11 @@ class SerialDebugTool(tk.Tk):
         self.encoding_var = tk.StringVar(value="utf-8")
         self.dtr_var = tk.BooleanVar(value=True)
         self.rts_var = tk.BooleanVar(value=True)
+
+        self.remote_host_var = tk.StringVar(value="127.0.0.1")
+        self.remote_port_var = tk.StringVar(value="10123")
+        self.local_host_var = tk.StringVar(value="0.0.0.0")
+        self.local_port_var = tk.StringVar(value="10123")
 
         self.hex_send_var = tk.BooleanVar(value=True)
         self.hex_recv_var = tk.BooleanVar(value=True)
@@ -138,9 +169,9 @@ class SerialDebugTool(tk.Tk):
         menu_bar = tk.Menu(self)
 
         action_menu = tk.Menu(menu_bar, tearoff=False)
-        action_menu.add_command(label="刷新串口", command=self.refresh_ports)
-        action_menu.add_command(label="打开串口", command=self.connect_serial)
-        action_menu.add_command(label="关闭串口", command=self.disconnect_serial)
+        action_menu.add_command(label="刷新连接列表", command=self.refresh_ports)
+        action_menu.add_command(label="打开连接", command=self.connect_current)
+        action_menu.add_command(label="关闭连接", command=self.disconnect_current)
         action_menu.add_separator()
         action_menu.add_command(label="退出", command=self.on_close)
         menu_bar.add_cascade(label="操作(O)", menu=action_menu)
@@ -165,11 +196,11 @@ class SerialDebugTool(tk.Tk):
         toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=(6, 4))
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        ttk.Button(toolbar, text="刷新串口", style="Small.TButton", command=self.refresh_ports).pack(
+        ttk.Button(toolbar, text="刷新列表", style="Small.TButton", command=self.refresh_ports).pack(
             side=tk.LEFT, padx=(0, 4)
         )
         self.toolbar_connect_btn = ttk.Button(
-            toolbar, text="打开串口", style="Small.TButton", command=self.toggle_connection
+            toolbar, text="打开连接", style="Small.TButton", command=self.toggle_connection
         )
         self.toolbar_connect_btn.pack(side=tk.LEFT, padx=(0, 4))
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
@@ -196,14 +227,28 @@ class SerialDebugTool(tk.Tk):
         self._build_workspace(right)
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
-        port_box = ttk.LabelFrame(parent, text="串口列表", style="Pane.TLabelframe")
-        port_box.pack(fill=tk.BOTH, expand=False)
+        mode_box = ttk.LabelFrame(parent, text="连接类型", style="Pane.TLabelframe")
+        mode_box.pack(fill=tk.X)
+        mode_box.columnconfigure(0, weight=1)
+        self.mode_combo = ttk.Combobox(
+            mode_box,
+            textvariable=self.mode_var,
+            values=CONNECTION_MODES,
+            state="readonly",
+            width=16,
+        )
+        self.mode_combo.grid(row=0, column=0, sticky=tk.EW)
+        self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_change)
 
-        self.port_tree = ttk.Treeview(port_box, show="tree", height=8)
+        self.port_box = ttk.LabelFrame(parent, text="连接列表", style="Pane.TLabelframe")
+        self.port_box.pack(fill=tk.BOTH, expand=False, pady=(8, 0))
+
+        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=7)
         self.port_tree.pack(fill=tk.BOTH, expand=True)
         self.port_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
         config_box = ttk.LabelFrame(parent, text="串口参数", style="Pane.TLabelframe")
+        self.serial_config_box = config_box
         config_box.pack(fill=tk.X, pady=(8, 0))
         config_box.columnconfigure(1, weight=1)
 
@@ -254,13 +299,27 @@ class SerialDebugTool(tk.Tk):
             side=tk.LEFT, padx=(8, 0)
         )
 
-        self.connect_btn = ttk.Button(config_box, text="打开串口", command=self.toggle_connection)
-        self.connect_btn.grid(row=8, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0))
+        self.network_config_box = self._build_network_config(parent)
+
+        self.connect_btn = ttk.Button(parent, text="打开连接", command=self.toggle_connection)
+        self.connect_btn.pack(fill=tk.X, pady=(8, 0))
 
         count_box = ttk.LabelFrame(parent, text="计数", style="Pane.TLabelframe")
         count_box.pack(fill=tk.X, pady=(8, 0))
         ttk.Label(count_box, textvariable=self.count_var, justify=tk.LEFT).pack(anchor=tk.W)
         ttk.Button(count_box, text="清空计数", command=self.clear_counts).pack(anchor=tk.W, pady=(6, 0))
+
+        self._update_mode_controls()
+
+    def _build_network_config(self, parent: ttk.Frame) -> ttk.LabelFrame:
+        network_box = ttk.LabelFrame(parent, text="网络参数", style="Pane.TLabelframe")
+        network_box.columnconfigure(1, weight=1)
+
+        self._labeled_widget(network_box, 0, "目标IP:", ttk.Entry(network_box, textvariable=self.remote_host_var))
+        self._labeled_widget(network_box, 1, "目标端口:", ttk.Entry(network_box, textvariable=self.remote_port_var))
+        self._labeled_widget(network_box, 2, "本地IP:", ttk.Entry(network_box, textvariable=self.local_host_var))
+        self._labeled_widget(network_box, 3, "本地端口:", ttk.Entry(network_box, textvariable=self.local_port_var))
+        return network_box
 
     def _make_port_selector(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
@@ -273,6 +332,31 @@ class SerialDebugTool(tk.Tk):
     def _labeled_widget(self, parent: ttk.Frame, row: int, label: str, widget: tk.Widget) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=2)
         widget.grid(row=row, column=1, sticky=tk.EW, pady=2)
+
+    def _on_mode_change(self, _event: tk.Event | None = None) -> None:
+        self._apply_mode_defaults()
+        self._update_mode_controls()
+        self._set_connected_state(self.is_connected)
+        self.status_var.set(f"当前模式：{self.mode_var.get()}")
+
+    def _apply_mode_defaults(self) -> None:
+        mode = self.mode_var.get()
+        local_port = self.local_port_var.get().strip()
+        if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT) and local_port == "10123":
+            self.local_port_var.set("0")
+        elif mode in (MODE_TCP_SERVER, MODE_UDP_SERVER) and local_port in ("", "0"):
+            self.local_port_var.set("10123")
+
+    def _update_mode_controls(self) -> None:
+        if not hasattr(self, "serial_config_box") or not hasattr(self, "network_config_box"):
+            return
+
+        self.serial_config_box.pack_forget()
+        self.network_config_box.pack_forget()
+        if self.mode_var.get() == MODE_SERIAL:
+            self.serial_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connect_btn)
+        else:
+            self.network_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connect_btn)
 
     def _build_workspace(self, parent: ttk.Frame) -> None:
         self.notebook = ttk.Notebook(parent)
@@ -379,11 +463,14 @@ class SerialDebugTool(tk.Tk):
     def refresh_ports(self) -> None:
         self.port_tree.delete(*self.port_tree.get_children())
         root_id = self.port_tree.insert("", tk.END, text="本机COM串口", open=True)
+        network_root_id = self.port_tree.insert("", tk.END, text="网络测试", open=True)
+        for mode in NETWORK_MODES:
+            self.port_tree.insert(network_root_id, tk.END, text=mode)
 
         if not HAS_PYSERIAL:
             self.port_combo.configure(values=())
             self.port_tree.insert(root_id, tk.END, text="未安装 pyserial")
-            self.status_var.set("缺少 pyserial，请先执行：python -m pip install -r requirements.txt")
+            self.status_var.set("缺少 pyserial，串口不可用；网络模式仍可使用")
             return
 
         ports = list(list_ports.comports())
@@ -407,19 +494,46 @@ class SerialDebugTool(tk.Tk):
         if not selected:
             return
         text = self.port_tree.item(selected[0], "text")
+        if text in NETWORK_MODES:
+            if not self.is_connected:
+                self.mode_var.set(text)
+                self._on_mode_change()
+            return
         match = re.match(r"(COM\d+)", text, flags=re.IGNORECASE)
         if match:
+            if not self.is_connected:
+                self.mode_var.set(MODE_SERIAL)
+                self._on_mode_change()
             self.port_var.set(match.group(1).upper())
 
     def toggle_connection(self) -> None:
         if self.is_connected:
-            self.disconnect_serial()
+            self.disconnect_current()
         else:
-            self.connect_serial()
+            self.connect_current()
 
     @property
     def is_connected(self) -> bool:
-        return bool(self.serial_port and getattr(self.serial_port, "is_open", False))
+        return any(
+            (
+                bool(self.serial_port and getattr(self.serial_port, "is_open", False)),
+                self.tcp_socket is not None,
+                self.tcp_server_socket is not None,
+                self.udp_socket is not None,
+            )
+        )
+
+    def connect_current(self) -> None:
+        if self.mode_var.get() == MODE_SERIAL:
+            self.connect_serial()
+        else:
+            self.connect_network()
+
+    def disconnect_current(self) -> None:
+        if self.serial_port is not None:
+            self.disconnect_serial()
+        elif self.tcp_socket is not None or self.tcp_server_socket is not None or self.udp_socket is not None:
+            self.disconnect_network()
 
     def connect_serial(self) -> None:
         if self.is_connected:
@@ -462,6 +576,108 @@ class SerialDebugTool(tk.Tk):
         self.status_var.set(f"{port_name} 已打开")
         self._on_auto_send_toggle()
 
+    def connect_network(self) -> None:
+        if self.is_connected:
+            return
+
+        mode = self.mode_var.get()
+        try:
+            self.stop_event.clear()
+            self.udp_peer = None
+            self.udp_default_peer = None
+            if mode == MODE_TCP_CLIENT:
+                host, port = self._remote_endpoint()
+                sock = socket.create_connection((host, port), timeout=5)
+                sock.settimeout(0.2)
+                self.tcp_socket = sock
+                self.reader_thread = threading.Thread(
+                    target=self._tcp_client_reader_loop,
+                    args=(sock,),
+                    name="tcp-client-reader",
+                    daemon=True,
+                )
+                self.reader_thread.start()
+                label = f"TCP客户端 {host}:{port}"
+            elif mode == MODE_TCP_SERVER:
+                host, port = self._local_endpoint()
+                server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.bind((host, port))
+                server.listen()
+                server.settimeout(0.2)
+                self.tcp_server_socket = server
+                self.reader_thread = threading.Thread(
+                    target=self._tcp_accept_loop,
+                    args=(server,),
+                    name="tcp-server-accept",
+                    daemon=True,
+                )
+                self.reader_thread.start()
+                actual_host, actual_port = server.getsockname()
+                label = f"TCP服务端 {actual_host}:{actual_port}"
+            elif mode == MODE_UDP_CLIENT:
+                host, port = self._remote_endpoint()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self._bind_udp_if_needed(sock)
+                sock.settimeout(0.2)
+                self.udp_socket = sock
+                self.udp_default_peer = (host, port)
+                self.reader_thread = threading.Thread(
+                    target=self._udp_reader_loop,
+                    args=(sock,),
+                    name="udp-client-reader",
+                    daemon=True,
+                )
+                self.reader_thread.start()
+                label = f"UDP客户端 {host}:{port}"
+            elif mode == MODE_UDP_SERVER:
+                host, port = self._local_endpoint()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.bind((host, port))
+                sock.settimeout(0.2)
+                self.udp_socket = sock
+                self.reader_thread = threading.Thread(
+                    target=self._udp_reader_loop,
+                    args=(sock,),
+                    name="udp-server-reader",
+                    daemon=True,
+                )
+                self.reader_thread.start()
+                actual_host, actual_port = sock.getsockname()
+                label = f"UDP服务端 {actual_host}:{actual_port}"
+            else:
+                raise ValueError("未知连接模式")
+        except Exception as exc:
+            self.disconnect_network()
+            messagebox.showerror("打开网络连接失败", str(exc))
+            self.status_var.set(f"打开 {mode} 失败")
+            return
+
+        self._set_connected_state(True)
+        self.notebook.tab(0, text=mode)
+        self.status_var.set(f"{label} 已打开")
+        self._on_auto_send_toggle()
+
+    def _remote_endpoint(self) -> tuple[str, int]:
+        host = self.remote_host_var.get().strip()
+        if not host:
+            raise ValueError("目标IP不能为空")
+        port = parse_port(self.remote_port_var.get(), "目标端口")
+        if port == 0:
+            raise ValueError("目标端口不能为 0")
+        return host, port
+
+    def _local_endpoint(self) -> tuple[str, int]:
+        host = self.local_host_var.get().strip() or "0.0.0.0"
+        port = parse_port(self.local_port_var.get(), "本地端口")
+        return host, port
+
+    def _bind_udp_if_needed(self, sock: socket.socket) -> None:
+        host = self.local_host_var.get().strip() or "0.0.0.0"
+        port = parse_port(self.local_port_var.get(), "本地端口")
+        if port or host not in ("", "0.0.0.0"):
+            sock.bind((host, port))
+
     def disconnect_serial(self) -> None:
         was_connected = self.is_connected
         self.stop_auto_send()
@@ -485,10 +701,125 @@ class SerialDebugTool(tk.Tk):
         if was_connected:
             self.status_var.set("串口已关闭")
 
+    def disconnect_network(self) -> None:
+        was_connected = self.is_connected
+        self.stop_auto_send()
+        self.stop_event.set()
+
+        for sock_name in ("tcp_socket", "tcp_server_socket", "udp_socket"):
+            sock = getattr(self, sock_name)
+            setattr(self, sock_name, None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        with self.tcp_clients_lock:
+            clients = list(self.tcp_clients)
+            self.tcp_clients.clear()
+        for client, _addr in clients:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+        self.udp_peer = None
+        self.udp_default_peer = None
+        if self.reader_thread and self.reader_thread.is_alive():
+            self.reader_thread.join(timeout=0.4)
+        self.reader_thread = None
+
+        self._set_connected_state(False)
+        self.notebook.tab(0, text="串口会话")
+        if was_connected:
+            self.status_var.set("网络连接已关闭")
+
+    def _tcp_client_reader_loop(self, sock: socket.socket) -> None:
+        while not self.stop_event.is_set():
+            try:
+                data = sock.recv(4096)
+            except socket.timeout:
+                continue
+            except Exception as exc:
+                if not self.stop_event.is_set():
+                    self.rx_queue.put(("error", f"TCP读取失败: {exc}"))
+                break
+
+            if not data:
+                if not self.stop_event.is_set():
+                    self.rx_queue.put(("closed", "TCP连接已断开"))
+                break
+            self.rx_queue.put(("data", data))
+
+    def _tcp_accept_loop(self, server: socket.socket) -> None:
+        while not self.stop_event.is_set():
+            try:
+                client, addr = server.accept()
+            except socket.timeout:
+                continue
+            except Exception as exc:
+                if not self.stop_event.is_set():
+                    self.rx_queue.put(("error", f"TCP服务端监听失败: {exc}"))
+                break
+
+            client.settimeout(0.2)
+            with self.tcp_clients_lock:
+                self.tcp_clients.append((client, addr))
+            self.rx_queue.put(("info", f"TCP客户端已连接 {addr[0]}:{addr[1]}"))
+            threading.Thread(
+                target=self._tcp_server_client_reader_loop,
+                args=(client, addr),
+                name=f"tcp-client-{addr[0]}:{addr[1]}",
+                daemon=True,
+            ).start()
+
+    def _tcp_server_client_reader_loop(self, client: socket.socket, addr: tuple[str, int]) -> None:
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    data = client.recv(4096)
+                except socket.timeout:
+                    continue
+                except Exception as exc:
+                    if not self.stop_event.is_set():
+                        self.rx_queue.put(("info", f"TCP客户端 {addr[0]}:{addr[1]} 读取失败: {exc}"))
+                    break
+
+                if not data:
+                    break
+                self.rx_queue.put(("data", data))
+        finally:
+            with self.tcp_clients_lock:
+                self.tcp_clients = [(sock, item_addr) for sock, item_addr in self.tcp_clients if sock is not client]
+            try:
+                client.close()
+            except Exception:
+                pass
+            if not self.stop_event.is_set():
+                self.rx_queue.put(("info", f"TCP客户端已断开 {addr[0]}:{addr[1]}"))
+
+    def _udp_reader_loop(self, sock: socket.socket) -> None:
+        while not self.stop_event.is_set():
+            try:
+                data, addr = sock.recvfrom(65535)
+            except socket.timeout:
+                continue
+            except Exception as exc:
+                if not self.stop_event.is_set():
+                    self.rx_queue.put(("error", f"UDP接收失败: {exc}"))
+                break
+
+            if data:
+                self.udp_peer = addr
+                self.rx_queue.put(("data", data))
+
     def _set_connected_state(self, connected: bool) -> None:
-        text = "关闭串口" if connected else "打开串口"
+        text = "关闭连接" if connected else "打开连接"
         self.connect_btn.configure(text=text)
         self.toolbar_connect_btn.configure(text=text)
+        if hasattr(self, "mode_combo"):
+            self.mode_combo.configure(state=tk.DISABLED if connected else "readonly")
 
     def _apply_line_state(self) -> None:
         port = self.serial_port
@@ -521,10 +852,16 @@ class SerialDebugTool(tk.Tk):
                     data = payload if isinstance(payload, bytes) else bytes(payload)
                     self.recv_bytes += len(data)
                     self._append_received_data(data)
+                elif kind == "info":
+                    self._append_system_message(str(payload))
+                elif kind == "closed":
+                    self._append_system_message(str(payload))
+                    self.status_var.set(str(payload))
+                    self.disconnect_current()
                 elif kind == "error":
-                    self.status_var.set(f"串口读取错误: {payload}")
-                    messagebox.showerror("串口读取错误", str(payload))
-                    self.disconnect_serial()
+                    self.status_var.set(f"连接错误: {payload}")
+                    messagebox.showerror("连接错误", str(payload))
+                    self.disconnect_current()
         except queue.Empty:
             pass
 
@@ -537,6 +874,15 @@ class SerialDebugTool(tk.Tk):
             self.receive_text.insert(tk.END, display)
             self.receive_text.see(tk.END)
         if display and self.realtime_save_var.get():
+            self._append_realtime_file(display)
+
+    def _append_system_message(self, text: str) -> None:
+        now = datetime.now().strftime("%H:%M:%S")
+        display = f"[{now}] {text}\n"
+        if not self.pause_display_var.get():
+            self.receive_text.insert(tk.END, display)
+            self.receive_text.see(tk.END)
+        if self.realtime_save_var.get():
             self._append_realtime_file(display)
 
     def _format_received_data(self, data: bytes) -> str:
@@ -573,14 +919,67 @@ class SerialDebugTool(tk.Tk):
             return
 
         try:
-            written = self.serial_port.write(data)
-            self.sent_bytes += int(written)
+            written, target_text = self._write_payload(data)
+            self.sent_bytes += written
             self._update_counts()
-            self.status_var.set(f"已发送 {written} 字节")
+            self.status_var.set(f"已发送 {written} 字节{target_text}")
         except Exception as exc:
             if not silent:
                 messagebox.showerror("发送失败", str(exc))
             self.status_var.set(f"发送失败: {exc}")
+
+    def _write_payload(self, data: bytes) -> tuple[int, str]:
+        if self.serial_port is not None and getattr(self.serial_port, "is_open", False):
+            written = int(self.serial_port.write(data))
+            return written, ""
+
+        if self.tcp_socket is not None:
+            self.tcp_socket.sendall(data)
+            return len(data), " 到 TCP 服务端"
+
+        if self.tcp_server_socket is not None:
+            with self.tcp_clients_lock:
+                clients = list(self.tcp_clients)
+            if not clients:
+                raise RuntimeError("TCP服务端当前没有已连接客户端")
+
+            sent_total = 0
+            failed_clients: list[tuple[socket.socket, tuple[str, int]]] = []
+            for client, addr in clients:
+                try:
+                    client.sendall(data)
+                    sent_total += len(data)
+                except Exception:
+                    failed_clients.append((client, addr))
+            if failed_clients:
+                self._remove_tcp_clients(failed_clients)
+            if sent_total == 0:
+                raise RuntimeError("TCP客户端发送失败")
+            return sent_total, f" 到 {sent_total // len(data)} 个 TCP 客户端"
+
+        if self.udp_socket is not None:
+            if self.mode_var.get() == MODE_UDP_CLIENT:
+                peer = self.udp_default_peer
+            else:
+                peer = self.udp_peer
+            if peer is None:
+                peer = self._remote_endpoint()
+            written = self.udp_socket.sendto(data, peer)
+            return int(written), f" 到 {peer[0]}:{peer[1]}"
+
+        raise RuntimeError("连接未打开")
+
+    def _remove_tcp_clients(self, clients: list[tuple[socket.socket, tuple[str, int]]]) -> None:
+        failed_sockets = {client for client, _addr in clients}
+        with self.tcp_clients_lock:
+            self.tcp_clients = [
+                (client, addr) for client, addr in self.tcp_clients if client not in failed_sockets
+            ]
+        for client, _addr in clients:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     def _build_send_payload(self) -> bytes:
         if self.send_file_var.get():
@@ -723,12 +1122,12 @@ class SerialDebugTool(tk.Tk):
         messagebox.showinfo(
             "关于",
             "本地COM串口调试工具\n\n"
-            "支持本机 COM 串口枚举、串口参数配置、文本/16进制发送、"
-            "自动发送、接收显示、实时保存和收发计数。",
+            "支持本机 COM 串口、TCP客户端、TCP服务端、UDP客户端、UDP服务端，"
+            "可进行文本/16进制发送、自动发送、接收显示、实时保存和收发计数。",
         )
 
     def on_close(self) -> None:
-        self.disconnect_serial()
+        self.disconnect_current()
         self.destroy()
 
 
