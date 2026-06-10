@@ -5,6 +5,7 @@ import re
 import socket
 import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
@@ -52,7 +53,6 @@ PARITY_OPTIONS = {
 }
 FLOW_OPTIONS = ("无", "RTS/CTS", "XON/XOFF", "DSR/DTR")
 ENCODINGS = ("utf-8", "gbk", "ascii", "latin-1")
-DEFAULT_SEND_TEXT = "4E 57 00 13 00 00 00 00 06 02 00 00 00 00 00 00 68 00 00 01 28"
 
 
 def parse_hex_payload(text: str) -> bytes:
@@ -86,6 +86,34 @@ def parse_port(value: str, field_name: str) -> int:
     return port
 
 
+@dataclass
+class ConnectionSession:
+    id: int
+    mode: str
+    name: str
+    config: dict[str, str]
+    tree_id: str = ""
+    serial_port: object | None = None
+    tcp_socket: socket.socket | None = None
+    tcp_server_socket: socket.socket | None = None
+    udp_socket: socket.socket | None = None
+    tcp_clients: list[tuple[socket.socket, tuple[str, int]]] = field(default_factory=list)
+    tcp_clients_lock: threading.Lock = field(default_factory=threading.Lock)
+    udp_peer: tuple[str, int] | None = None
+    udp_default_peer: tuple[str, int] | None = None
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    threads: list[threading.Thread] = field(default_factory=list)
+    sent_bytes: int = 0
+    recv_bytes: int = 0
+    sent_last: int = 0
+    recv_last: int = 0
+
+    @property
+    def is_connected(self) -> bool:
+        serial_open = bool(self.serial_port and getattr(self.serial_port, "is_open", False))
+        return any((serial_open, self.tcp_socket, self.tcp_server_socket, self.udp_socket))
+
+
 class SerialDebugTool(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -93,17 +121,11 @@ class SerialDebugTool(tk.Tk):
         self.geometry("1180x760")
         self.minsize(980, 620)
 
-        self.serial_port = None
-        self.tcp_socket: socket.socket | None = None
-        self.tcp_server_socket: socket.socket | None = None
-        self.udp_socket: socket.socket | None = None
-        self.tcp_clients: list[tuple[socket.socket, tuple[str, int]]] = []
-        self.tcp_clients_lock = threading.Lock()
-        self.udp_peer: tuple[str, int] | None = None
-        self.udp_default_peer: tuple[str, int] | None = None
-        self.reader_thread: threading.Thread | None = None
-        self.stop_event = threading.Event()
-        self.rx_queue: queue.Queue[tuple[str, bytes | str]] = queue.Queue()
+        self.sessions: dict[int, ConnectionSession] = {}
+        self.mode_root_ids: dict[str, str] = {}
+        self.next_session_id = 1
+        self.active_session_id: int | None = None
+        self.rx_queue: queue.Queue[tuple[str, int, bytes | str]] = queue.Queue()
         self.auto_send_job: str | None = None
 
         self.sent_bytes = 0
@@ -127,7 +149,7 @@ class SerialDebugTool(tk.Tk):
         self.local_host_var = tk.StringVar(value="0.0.0.0")
         self.local_port_var = tk.StringVar(value="10123")
 
-        self.hex_send_var = tk.BooleanVar(value=True)
+        self.hex_send_var = tk.BooleanVar(value=False)
         self.hex_recv_var = tk.BooleanVar(value=True)
         self.send_newline_var = tk.BooleanVar(value=False)
         self.auto_send_var = tk.BooleanVar(value=False)
@@ -143,6 +165,7 @@ class SerialDebugTool(tk.Tk):
         self.status_var = tk.StringVar(value="就绪")
         self.count_var = tk.StringVar(value="发送: 0 字节    接收: 0 字节")
         self.speed_var = tk.StringVar(value="发送速度(B/S): 0    接收速度(B/S): 0")
+        self.status_images = self._create_status_images()
 
         self._build_style()
         self._build_menu()
@@ -165,11 +188,29 @@ class SerialDebugTool(tk.Tk):
         style.configure("Pane.TLabelframe", padding=6)
         style.configure("Small.TButton", padding=(8, 2))
 
+    def _create_status_images(self) -> dict[str, tk.PhotoImage]:
+        def make_dot(color: str) -> tk.PhotoImage:
+            image = tk.PhotoImage(width=12, height=12)
+            center = 5.5
+            radius = 4.2
+            for x in range(12):
+                for y in range(12):
+                    if ((x - center) ** 2 + (y - center) ** 2) <= radius**2:
+                        image.put(color, (x, y))
+            return image
+
+        return {
+            "disconnected": make_dot("#2F80ED"),
+            "connected": make_dot("#27AE60"),
+        }
+
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
 
         action_menu = tk.Menu(menu_bar, tearoff=False)
         action_menu.add_command(label="刷新连接列表", command=self.refresh_ports)
+        action_menu.add_command(label="创建连接", command=self.create_connection)
+        action_menu.add_command(label="删除连接", command=self.delete_current_connection)
         action_menu.add_command(label="打开连接", command=self.connect_current)
         action_menu.add_command(label="关闭连接", command=self.disconnect_current)
         action_menu.add_separator()
@@ -197,6 +238,12 @@ class SerialDebugTool(tk.Tk):
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
         ttk.Button(toolbar, text="刷新列表", style="Small.TButton", command=self.refresh_ports).pack(
+            side=tk.LEFT, padx=(0, 4)
+        )
+        ttk.Button(toolbar, text="创建连接", style="Small.TButton", command=self.create_connection).pack(
+            side=tk.LEFT, padx=(0, 4)
+        )
+        ttk.Button(toolbar, text="删除连接", style="Small.TButton", command=self.delete_current_connection).pack(
             side=tk.LEFT, padx=(0, 4)
         )
         self.toolbar_connect_btn = ttk.Button(
@@ -239,11 +286,21 @@ class SerialDebugTool(tk.Tk):
         )
         self.mode_combo.grid(row=0, column=0, sticky=tk.EW)
         self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_change)
+        mode_buttons = ttk.Frame(mode_box)
+        mode_buttons.grid(row=1, column=0, sticky=tk.EW, pady=(6, 0))
+        mode_buttons.columnconfigure(0, weight=1)
+        mode_buttons.columnconfigure(1, weight=1)
+        ttk.Button(mode_buttons, text="创建", command=self.create_connection).grid(
+            row=0, column=0, sticky=tk.EW, padx=(0, 3)
+        )
+        ttk.Button(mode_buttons, text="删除", command=self.delete_current_connection).grid(
+            row=0, column=1, sticky=tk.EW, padx=(3, 0)
+        )
 
         self.port_box = ttk.LabelFrame(parent, text="连接列表", style="Pane.TLabelframe")
         self.port_box.pack(fill=tk.BOTH, expand=False, pady=(8, 0))
 
-        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=7)
+        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=10)
         self.port_tree.pack(fill=tk.BOTH, expand=True)
         self.port_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
@@ -334,6 +391,10 @@ class SerialDebugTool(tk.Tk):
         widget.grid(row=row, column=1, sticky=tk.EW, pady=2)
 
     def _on_mode_change(self, _event: tk.Event | None = None) -> None:
+        if _event is not None:
+            self.active_session_id = None
+            for item in self.port_tree.selection():
+                self.port_tree.selection_remove(item)
         self._apply_mode_defaults()
         self._update_mode_controls()
         self._set_connected_state(self.is_connected)
@@ -412,7 +473,6 @@ class SerialDebugTool(tk.Tk):
 
         self.send_text = tk.Text(parent, height=8, wrap=tk.CHAR, undo=True)
         self.send_text.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
-        self.send_text.insert("1.0", DEFAULT_SEND_TEXT)
 
         self._toggle_file_send_controls()
 
@@ -461,50 +521,212 @@ class SerialDebugTool(tk.Tk):
         ttk.Label(status, textvariable=self.speed_var, style="Status.TLabel").pack(side=tk.RIGHT)
 
     def refresh_ports(self) -> None:
-        self.port_tree.delete(*self.port_tree.get_children())
-        root_id = self.port_tree.insert("", tk.END, text="本机COM串口", open=True)
-        network_root_id = self.port_tree.insert("", tk.END, text="网络测试", open=True)
-        for mode in NETWORK_MODES:
-            self.port_tree.insert(network_root_id, tk.END, text=mode)
+        self._refresh_serial_ports()
+        self._rebuild_connection_tree()
 
+    def _refresh_serial_ports(self) -> None:
+        values: list[str] = []
+        status = ""
         if not HAS_PYSERIAL:
             self.port_combo.configure(values=())
-            self.port_tree.insert(root_id, tk.END, text="未安装 pyserial")
-            self.status_var.set("缺少 pyserial，串口不可用；网络模式仍可使用")
-            return
-
-        ports = list(list_ports.comports())
-        values: list[str] = []
-        for item in ports:
-            label = f"{item.device} - {item.description}"
-            self.port_tree.insert(root_id, tk.END, text=label, values=(item.device,))
-            values.append(item.device)
-
-        self.port_combo.configure(values=values)
-        if values and (not self.port_var.get() or self.port_var.get() not in values):
-            self.port_var.set(values[0])
-        if not values:
-            self.port_tree.insert(root_id, tk.END, text="未发现串口")
-            self.status_var.set("未发现本机 COM 串口")
+            status = "缺少 pyserial，串口不可用；网络模式仍可使用"
         else:
-            self.status_var.set(f"发现 {len(values)} 个串口")
+            ports = list(list_ports.comports())
+            for item in ports:
+                values.append(item.device)
+
+            self.port_combo.configure(values=values)
+            if values and (not self.port_var.get() or self.port_var.get() not in values):
+                self.port_var.set(values[0])
+            status = "未发现本机 COM 串口" if not values else f"发现 {len(values)} 个串口"
+
+        self.status_var.set(status)
+
+    def _rebuild_connection_tree(self) -> None:
+        self.port_tree.delete(*self.port_tree.get_children())
+        self.mode_root_ids.clear()
+        for mode in CONNECTION_MODES:
+            self.mode_root_ids[mode] = self.port_tree.insert("", tk.END, text=mode, open=True)
+
+        for session in sorted(self.sessions.values(), key=lambda item: item.id):
+            parent = self.mode_root_ids[session.mode]
+            image = self._session_status_image(session)
+            session.tree_id = self.port_tree.insert(parent, tk.END, text=session.name, image=image, open=True)
+
+        if self.active_session_id in self.sessions:
+            tree_id = self.sessions[self.active_session_id].tree_id
+            if tree_id:
+                self.port_tree.selection_set(tree_id)
+                self.port_tree.focus(tree_id)
+
+    def _session_status_image(self, session: ConnectionSession) -> tk.PhotoImage:
+        key = "connected" if session.is_connected else "disconnected"
+        return self.status_images[key]
+
+    def _update_session_tree_status(self, session: ConnectionSession) -> None:
+        if session.tree_id:
+            self.port_tree.item(session.tree_id, image=self._session_status_image(session), text=session.name)
 
     def _on_tree_select(self, _event: tk.Event) -> None:
         selected = self.port_tree.selection()
         if not selected:
             return
+        selected_id = selected[0]
         text = self.port_tree.item(selected[0], "text")
-        if text in NETWORK_MODES:
-            if not self.is_connected:
-                self.mode_var.set(text)
+
+        for mode, root_id in self.mode_root_ids.items():
+            if selected_id == root_id:
+                self.active_session_id = None
+                self.mode_var.set(mode)
                 self._on_mode_change()
+                self._update_counts()
+                self._set_connected_state(False)
+                return
+
+        session = self._session_by_tree_id(selected_id)
+        if session is not None:
+            self.active_session_id = session.id
+            self.mode_var.set(session.mode)
+            self._load_session_config(session)
+            self._update_mode_controls()
+            self._set_connected_state(session.is_connected)
+            self._update_counts()
+            self.notebook.tab(0, text=session.name)
+            self.status_var.set(f"当前连接：{session.name}")
+            return
+
+        if text in NETWORK_MODES:
+            self.mode_var.set(text)
+            self._on_mode_change()
             return
         match = re.match(r"(COM\d+)", text, flags=re.IGNORECASE)
         if match:
-            if not self.is_connected:
-                self.mode_var.set(MODE_SERIAL)
-                self._on_mode_change()
+            self.mode_var.set(MODE_SERIAL)
+            self._on_mode_change()
             self.port_var.set(match.group(1).upper())
+
+    def _session_by_tree_id(self, tree_id: str) -> ConnectionSession | None:
+        for session in self.sessions.values():
+            if session.tree_id == tree_id:
+                return session
+        return None
+
+    @property
+    def active_session(self) -> ConnectionSession | None:
+        if self.active_session_id is None:
+            return None
+        return self.sessions.get(self.active_session_id)
+
+    def create_connection(self) -> ConnectionSession | None:
+        mode = self.mode_var.get()
+        try:
+            config = self._capture_current_config(mode)
+        except Exception as exc:
+            messagebox.showerror("创建连接失败", str(exc))
+            return None
+
+        session = ConnectionSession(
+            id=self.next_session_id,
+            mode=mode,
+            name=self._unique_session_name(self._session_label(mode, config)),
+            config=config,
+        )
+        self.next_session_id += 1
+        self.sessions[session.id] = session
+        self.active_session_id = session.id
+        self._rebuild_connection_tree()
+        self._set_connected_state(False)
+        self._update_counts()
+        self.status_var.set(f"已创建连接：{session.name}")
+        return session
+
+    def delete_current_connection(self) -> None:
+        session = self.active_session
+        if session is None:
+            messagebox.showwarning("未选择连接", "请先在连接列表中选择要删除的连接。")
+            return
+        if session.is_connected:
+            self.disconnect_session(session)
+        if session.tree_id:
+            self.port_tree.delete(session.tree_id)
+        self.sessions.pop(session.id, None)
+        self.active_session_id = None
+        self._update_counts()
+        self._set_connected_state(False)
+        self.notebook.tab(0, text="串口会话")
+        self.status_var.set(f"已删除连接：{session.name}")
+
+    def _capture_current_config(self, mode: str) -> dict[str, str]:
+        if mode == MODE_SERIAL:
+            port_name = self.port_var.get().strip()
+            if not port_name:
+                raise ValueError("请先选择或输入 COM 口，例如 COM3。")
+            return {
+                "port": port_name,
+                "baud": self.baud_var.get().strip(),
+                "data_bits": self.data_bits_var.get().strip(),
+                "parity": self.parity_var.get().strip(),
+                "stop_bits": self.stop_bits_var.get().strip(),
+                "flow": self.flow_var.get().strip(),
+                "dtr": "1" if self.dtr_var.get() else "0",
+                "rts": "1" if self.rts_var.get() else "0",
+            }
+
+        remote_host = self.remote_host_var.get().strip()
+        remote_port = self.remote_port_var.get().strip()
+        local_host = self.local_host_var.get().strip() or "0.0.0.0"
+        local_port = self.local_port_var.get().strip() or "0"
+
+        if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT):
+            if not remote_host:
+                raise ValueError("目标IP不能为空")
+            if parse_port(remote_port, "目标端口") == 0:
+                raise ValueError("目标端口不能为 0")
+            parse_port(local_port, "本地端口")
+        elif mode in (MODE_TCP_SERVER, MODE_UDP_SERVER):
+            parse_port(local_port, "本地端口")
+        else:
+            raise ValueError("未知连接类型")
+
+        return {
+            "remote_host": remote_host,
+            "remote_port": remote_port,
+            "local_host": local_host,
+            "local_port": local_port,
+        }
+
+    def _load_session_config(self, session: ConnectionSession) -> None:
+        config = session.config
+        if session.mode == MODE_SERIAL:
+            self.port_var.set(config.get("port", ""))
+            self.baud_var.set(config.get("baud", "115200"))
+            self.data_bits_var.set(config.get("data_bits", "8"))
+            self.parity_var.set(config.get("parity", "无"))
+            self.stop_bits_var.set(config.get("stop_bits", "1"))
+            self.flow_var.set(config.get("flow", "无"))
+            self.dtr_var.set(config.get("dtr", "1") == "1")
+            self.rts_var.set(config.get("rts", "1") == "1")
+        else:
+            self.remote_host_var.set(config.get("remote_host", "127.0.0.1"))
+            self.remote_port_var.set(config.get("remote_port", "10123"))
+            self.local_host_var.set(config.get("local_host", "0.0.0.0"))
+            self.local_port_var.set(config.get("local_port", "0"))
+
+    def _session_label(self, mode: str, config: dict[str, str]) -> str:
+        if mode == MODE_SERIAL:
+            return f"{mode} {config.get('port', '')}"
+        if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT):
+            return f"{mode} {config.get('remote_host', '')}:{config.get('remote_port', '')}"
+        return f"{mode} {config.get('local_host', '')}:{config.get('local_port', '')}"
+
+    def _unique_session_name(self, base_name: str) -> str:
+        existing = {session.name for session in self.sessions.values()}
+        if base_name not in existing:
+            return base_name
+        index = 2
+        while f"{base_name} #{index}" in existing:
+            index += 1
+        return f"{base_name} #{index}"
 
     def toggle_connection(self) -> None:
         if self.is_connected:
@@ -514,177 +736,219 @@ class SerialDebugTool(tk.Tk):
 
     @property
     def is_connected(self) -> bool:
-        return any(
-            (
-                bool(self.serial_port and getattr(self.serial_port, "is_open", False)),
-                self.tcp_socket is not None,
-                self.tcp_server_socket is not None,
-                self.udp_socket is not None,
-            )
-        )
+        session = self.active_session
+        return bool(session and session.is_connected)
+
+    def _connected_sessions(self) -> list[ConnectionSession]:
+        return [session for session in self.sessions.values() if session.is_connected]
 
     def connect_current(self) -> None:
-        if self.mode_var.get() == MODE_SERIAL:
-            self.connect_serial()
+        session = self.active_session
+        if session is None:
+            messagebox.showwarning("未选择连接", "请先创建并选择一个连接。")
+            return
+        if session.is_connected:
+            return
+
+        try:
+            session.config = self._capture_current_config(session.mode)
+            session.name = self._unique_session_name_for_session(session, self._session_label(session.mode, session.config))
+            self._update_session_tree_status(session)
+        except Exception as exc:
+            messagebox.showerror("连接参数错误", str(exc))
+            return
+
+        for connected_session in self._connected_sessions():
+            if connected_session.id != session.id:
+                self.disconnect_session(connected_session)
+
+        if session.mode == MODE_SERIAL:
+            self.connect_serial(session)
         else:
-            self.connect_network()
+            self.connect_network(session)
 
     def disconnect_current(self) -> None:
-        if self.serial_port is not None:
-            self.disconnect_serial()
-        elif self.tcp_socket is not None or self.tcp_server_socket is not None or self.udp_socket is not None:
-            self.disconnect_network()
+        session = self.active_session
+        if session is not None:
+            self.disconnect_session(session)
 
-    def connect_serial(self) -> None:
-        if self.is_connected:
+    def disconnect_session(self, session: ConnectionSession) -> None:
+        if session.mode == MODE_SERIAL:
+            self.disconnect_serial(session)
+        else:
+            self.disconnect_network(session)
+
+    def _unique_session_name_for_session(self, session: ConnectionSession, base_name: str) -> str:
+        existing = {item.name for item in self.sessions.values() if item.id != session.id}
+        if base_name not in existing:
+            return base_name
+        index = 2
+        while f"{base_name} #{index}" in existing:
+            index += 1
+        return f"{base_name} #{index}"
+
+    def connect_serial(self, session: ConnectionSession) -> None:
+        if session.is_connected:
             return
         if not HAS_PYSERIAL:
             messagebox.showerror("缺少依赖", "请先执行：python -m pip install -r requirements.txt")
             return
 
-        port_name = self.port_var.get().strip()
+        port_name = session.config.get("port", "").strip()
         if not port_name:
             messagebox.showwarning("请选择串口", "请先选择或输入 COM 口，例如 COM3。")
             return
 
         try:
-            flow = self.flow_var.get()
-            self.stop_event.clear()
-            self.serial_port = serial.Serial(
+            flow = session.config.get("flow", "无")
+            session.stop_event.clear()
+            session.serial_port = serial.Serial(
                 port=port_name,
-                baudrate=int(self.baud_var.get()),
-                bytesize=int(self.data_bits_var.get()),
-                parity=PARITY_OPTIONS.get(self.parity_var.get(), "N"),
-                stopbits=float(self.stop_bits_var.get()),
+                baudrate=int(session.config.get("baud", "115200")),
+                bytesize=int(session.config.get("data_bits", "8")),
+                parity=PARITY_OPTIONS.get(session.config.get("parity", "无"), "N"),
+                stopbits=float(session.config.get("stop_bits", "1")),
                 timeout=0.05,
                 write_timeout=2,
                 rtscts=flow == "RTS/CTS",
                 xonxoff=flow == "XON/XOFF",
                 dsrdtr=flow == "DSR/DTR",
             )
-            self._apply_line_state()
+            self._apply_line_state(session)
         except Exception as exc:
-            self.serial_port = None
+            session.serial_port = None
             messagebox.showerror("打开串口失败", str(exc))
             self.status_var.set(f"打开 {port_name} 失败")
             return
 
-        self.reader_thread = threading.Thread(target=self._reader_loop, name="serial-reader", daemon=True)
-        self.reader_thread.start()
-        self._set_connected_state(True)
-        self.notebook.tab(0, text=port_name)
+        thread = threading.Thread(target=self._reader_loop, args=(session,), name="serial-reader", daemon=True)
+        session.threads.append(thread)
+        thread.start()
+        session.name = self._unique_session_name_for_session(session, f"{MODE_SERIAL} {port_name}")
+        self._set_connected_state(session.is_connected)
+        self._update_session_tree_status(session)
+        self.notebook.tab(0, text=session.name)
         self.status_var.set(f"{port_name} 已打开")
         self._on_auto_send_toggle()
 
-    def connect_network(self) -> None:
-        if self.is_connected:
+    def connect_network(self, session: ConnectionSession) -> None:
+        if session.is_connected:
             return
 
-        mode = self.mode_var.get()
+        mode = session.mode
         try:
-            self.stop_event.clear()
-            self.udp_peer = None
-            self.udp_default_peer = None
+            session.stop_event.clear()
+            session.udp_peer = None
+            session.udp_default_peer = None
             if mode == MODE_TCP_CLIENT:
-                host, port = self._remote_endpoint()
+                host, port = self._remote_endpoint(session)
                 sock = socket.create_connection((host, port), timeout=5)
                 sock.settimeout(0.2)
-                self.tcp_socket = sock
-                self.reader_thread = threading.Thread(
+                session.tcp_socket = sock
+                thread = threading.Thread(
                     target=self._tcp_client_reader_loop,
-                    args=(sock,),
+                    args=(session, sock),
                     name="tcp-client-reader",
                     daemon=True,
                 )
-                self.reader_thread.start()
+                session.threads.append(thread)
+                thread.start()
                 label = f"TCP客户端 {host}:{port}"
             elif mode == MODE_TCP_SERVER:
-                host, port = self._local_endpoint()
+                host, port = self._local_endpoint(session)
                 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 server.bind((host, port))
                 server.listen()
                 server.settimeout(0.2)
-                self.tcp_server_socket = server
-                self.reader_thread = threading.Thread(
+                session.tcp_server_socket = server
+                thread = threading.Thread(
                     target=self._tcp_accept_loop,
-                    args=(server,),
+                    args=(session, server),
                     name="tcp-server-accept",
                     daemon=True,
                 )
-                self.reader_thread.start()
+                session.threads.append(thread)
+                thread.start()
                 actual_host, actual_port = server.getsockname()
                 label = f"TCP服务端 {actual_host}:{actual_port}"
             elif mode == MODE_UDP_CLIENT:
-                host, port = self._remote_endpoint()
+                host, port = self._remote_endpoint(session)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self._bind_udp_if_needed(sock)
+                self._bind_udp_if_needed(session, sock)
                 sock.settimeout(0.2)
-                self.udp_socket = sock
-                self.udp_default_peer = (host, port)
-                self.reader_thread = threading.Thread(
+                session.udp_socket = sock
+                session.udp_default_peer = (host, port)
+                thread = threading.Thread(
                     target=self._udp_reader_loop,
-                    args=(sock,),
+                    args=(session, sock),
                     name="udp-client-reader",
                     daemon=True,
                 )
-                self.reader_thread.start()
+                session.threads.append(thread)
+                thread.start()
                 label = f"UDP客户端 {host}:{port}"
             elif mode == MODE_UDP_SERVER:
-                host, port = self._local_endpoint()
+                host, port = self._local_endpoint(session)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.bind((host, port))
                 sock.settimeout(0.2)
-                self.udp_socket = sock
-                self.reader_thread = threading.Thread(
+                session.udp_socket = sock
+                thread = threading.Thread(
                     target=self._udp_reader_loop,
-                    args=(sock,),
+                    args=(session, sock),
                     name="udp-server-reader",
                     daemon=True,
                 )
-                self.reader_thread.start()
+                session.threads.append(thread)
+                thread.start()
                 actual_host, actual_port = sock.getsockname()
                 label = f"UDP服务端 {actual_host}:{actual_port}"
             else:
                 raise ValueError("未知连接模式")
         except Exception as exc:
-            self.disconnect_network()
+            self.disconnect_network(session)
             messagebox.showerror("打开网络连接失败", str(exc))
             self.status_var.set(f"打开 {mode} 失败")
             return
 
-        self._set_connected_state(True)
-        self.notebook.tab(0, text=mode)
+        session.name = self._unique_session_name_for_session(session, label)
+        self._set_connected_state(session.is_connected)
+        self._update_session_tree_status(session)
+        self.notebook.tab(0, text=session.name)
         self.status_var.set(f"{label} 已打开")
         self._on_auto_send_toggle()
 
-    def _remote_endpoint(self) -> tuple[str, int]:
-        host = self.remote_host_var.get().strip()
+    def _remote_endpoint(self, session: ConnectionSession | None = None) -> tuple[str, int]:
+        config = session.config if session is not None else None
+        host = (config.get("remote_host", "") if config else self.remote_host_var.get()).strip()
         if not host:
             raise ValueError("目标IP不能为空")
-        port = parse_port(self.remote_port_var.get(), "目标端口")
+        port = parse_port(config.get("remote_port", "") if config else self.remote_port_var.get(), "目标端口")
         if port == 0:
             raise ValueError("目标端口不能为 0")
         return host, port
 
-    def _local_endpoint(self) -> tuple[str, int]:
-        host = self.local_host_var.get().strip() or "0.0.0.0"
-        port = parse_port(self.local_port_var.get(), "本地端口")
+    def _local_endpoint(self, session: ConnectionSession | None = None) -> tuple[str, int]:
+        config = session.config if session is not None else None
+        host = (config.get("local_host", "") if config else self.local_host_var.get()).strip() or "0.0.0.0"
+        port = parse_port(config.get("local_port", "") if config else self.local_port_var.get(), "本地端口")
         return host, port
 
-    def _bind_udp_if_needed(self, sock: socket.socket) -> None:
-        host = self.local_host_var.get().strip() or "0.0.0.0"
-        port = parse_port(self.local_port_var.get(), "本地端口")
+    def _bind_udp_if_needed(self, session: ConnectionSession, sock: socket.socket) -> None:
+        host = session.config.get("local_host", "").strip() or "0.0.0.0"
+        port = parse_port(session.config.get("local_port", "0"), "本地端口")
         if port or host not in ("", "0.0.0.0"):
             sock.bind((host, port))
 
-    def disconnect_serial(self) -> None:
-        was_connected = self.is_connected
-        self.stop_auto_send()
-        self.stop_event.set()
+    def disconnect_serial(self, session: ConnectionSession) -> None:
+        was_connected = session.is_connected
+        if was_connected:
+            self.stop_auto_send()
+        session.stop_event.set()
 
-        port = self.serial_port
-        self.serial_port = None
+        port = session.serial_port
+        session.serial_port = None
         if port is not None:
             try:
                 if getattr(port, "is_open", False):
@@ -692,204 +956,226 @@ class SerialDebugTool(tk.Tk):
             except Exception:
                 pass
 
-        if self.reader_thread and self.reader_thread.is_alive():
-            self.reader_thread.join(timeout=0.4)
-        self.reader_thread = None
+        self._join_session_threads(session)
+        self._update_session_tree_status(session)
 
-        self._set_connected_state(False)
-        self.notebook.tab(0, text="串口会话")
+        if session.id == self.active_session_id:
+            self._set_connected_state(False)
+            self.notebook.tab(0, text=session.name)
         if was_connected:
-            self.status_var.set("串口已关闭")
+            self.status_var.set(f"{session.name} 已关闭")
 
-    def disconnect_network(self) -> None:
-        was_connected = self.is_connected
-        self.stop_auto_send()
-        self.stop_event.set()
+    def disconnect_network(self, session: ConnectionSession) -> None:
+        was_connected = session.is_connected
+        if was_connected:
+            self.stop_auto_send()
+        session.stop_event.set()
 
         for sock_name in ("tcp_socket", "tcp_server_socket", "udp_socket"):
-            sock = getattr(self, sock_name)
-            setattr(self, sock_name, None)
+            sock = getattr(session, sock_name)
+            setattr(session, sock_name, None)
             if sock is not None:
                 try:
                     sock.close()
                 except Exception:
                     pass
 
-        with self.tcp_clients_lock:
-            clients = list(self.tcp_clients)
-            self.tcp_clients.clear()
+        with session.tcp_clients_lock:
+            clients = list(session.tcp_clients)
+            session.tcp_clients.clear()
         for client, _addr in clients:
             try:
                 client.close()
             except Exception:
                 pass
 
-        self.udp_peer = None
-        self.udp_default_peer = None
-        if self.reader_thread and self.reader_thread.is_alive():
-            self.reader_thread.join(timeout=0.4)
-        self.reader_thread = None
+        session.udp_peer = None
+        session.udp_default_peer = None
+        self._join_session_threads(session)
+        self._update_session_tree_status(session)
 
-        self._set_connected_state(False)
-        self.notebook.tab(0, text="串口会话")
+        if session.id == self.active_session_id:
+            self._set_connected_state(False)
+            self.notebook.tab(0, text=session.name)
         if was_connected:
-            self.status_var.set("网络连接已关闭")
+            self.status_var.set(f"{session.name} 已关闭")
 
-    def _tcp_client_reader_loop(self, sock: socket.socket) -> None:
-        while not self.stop_event.is_set():
+    def _join_session_threads(self, session: ConnectionSession) -> None:
+        current_thread = threading.current_thread()
+        for thread in list(session.threads):
+            if thread is not current_thread and thread.is_alive():
+                thread.join(timeout=0.4)
+        session.threads.clear()
+
+    def _tcp_client_reader_loop(self, session: ConnectionSession, sock: socket.socket) -> None:
+        while not session.stop_event.is_set():
             try:
                 data = sock.recv(4096)
             except socket.timeout:
                 continue
             except Exception as exc:
-                if not self.stop_event.is_set():
-                    self.rx_queue.put(("error", f"TCP读取失败: {exc}"))
+                if not session.stop_event.is_set():
+                    self.rx_queue.put(("error", session.id, f"TCP读取失败: {exc}"))
                 break
 
             if not data:
-                if not self.stop_event.is_set():
-                    self.rx_queue.put(("closed", "TCP连接已断开"))
+                if not session.stop_event.is_set():
+                    self.rx_queue.put(("closed", session.id, "TCP连接已断开"))
                 break
-            self.rx_queue.put(("data", data))
+            self.rx_queue.put(("data", session.id, data))
 
-    def _tcp_accept_loop(self, server: socket.socket) -> None:
-        while not self.stop_event.is_set():
+    def _tcp_accept_loop(self, session: ConnectionSession, server: socket.socket) -> None:
+        while not session.stop_event.is_set():
             try:
                 client, addr = server.accept()
             except socket.timeout:
                 continue
             except Exception as exc:
-                if not self.stop_event.is_set():
-                    self.rx_queue.put(("error", f"TCP服务端监听失败: {exc}"))
+                if not session.stop_event.is_set():
+                    self.rx_queue.put(("error", session.id, f"TCP服务端监听失败: {exc}"))
                 break
 
             client.settimeout(0.2)
-            with self.tcp_clients_lock:
-                self.tcp_clients.append((client, addr))
-            self.rx_queue.put(("info", f"TCP客户端已连接 {addr[0]}:{addr[1]}"))
-            threading.Thread(
+            with session.tcp_clients_lock:
+                session.tcp_clients.append((client, addr))
+            self.rx_queue.put(("info", session.id, f"TCP客户端已连接 {addr[0]}:{addr[1]}"))
+            thread = threading.Thread(
                 target=self._tcp_server_client_reader_loop,
-                args=(client, addr),
+                args=(session, client, addr),
                 name=f"tcp-client-{addr[0]}:{addr[1]}",
                 daemon=True,
-            ).start()
+            )
+            session.threads.append(thread)
+            thread.start()
 
-    def _tcp_server_client_reader_loop(self, client: socket.socket, addr: tuple[str, int]) -> None:
+    def _tcp_server_client_reader_loop(
+        self, session: ConnectionSession, client: socket.socket, addr: tuple[str, int]
+    ) -> None:
         try:
-            while not self.stop_event.is_set():
+            while not session.stop_event.is_set():
                 try:
                     data = client.recv(4096)
                 except socket.timeout:
                     continue
                 except Exception as exc:
-                    if not self.stop_event.is_set():
-                        self.rx_queue.put(("info", f"TCP客户端 {addr[0]}:{addr[1]} 读取失败: {exc}"))
+                    if not session.stop_event.is_set():
+                        self.rx_queue.put(("info", session.id, f"TCP客户端 {addr[0]}:{addr[1]} 读取失败: {exc}"))
                     break
 
                 if not data:
                     break
-                self.rx_queue.put(("data", data))
+                self.rx_queue.put(("data", session.id, data))
         finally:
-            with self.tcp_clients_lock:
-                self.tcp_clients = [(sock, item_addr) for sock, item_addr in self.tcp_clients if sock is not client]
+            with session.tcp_clients_lock:
+                session.tcp_clients = [
+                    (sock, item_addr) for sock, item_addr in session.tcp_clients if sock is not client
+                ]
             try:
                 client.close()
             except Exception:
                 pass
-            if not self.stop_event.is_set():
-                self.rx_queue.put(("info", f"TCP客户端已断开 {addr[0]}:{addr[1]}"))
+            if not session.stop_event.is_set():
+                self.rx_queue.put(("info", session.id, f"TCP客户端已断开 {addr[0]}:{addr[1]}"))
 
-    def _udp_reader_loop(self, sock: socket.socket) -> None:
-        while not self.stop_event.is_set():
+    def _udp_reader_loop(self, session: ConnectionSession, sock: socket.socket) -> None:
+        while not session.stop_event.is_set():
             try:
                 data, addr = sock.recvfrom(65535)
             except socket.timeout:
                 continue
             except Exception as exc:
-                if not self.stop_event.is_set():
-                    self.rx_queue.put(("error", f"UDP接收失败: {exc}"))
+                if not session.stop_event.is_set():
+                    self.rx_queue.put(("error", session.id, f"UDP接收失败: {exc}"))
                 break
 
             if data:
-                self.udp_peer = addr
-                self.rx_queue.put(("data", data))
+                session.udp_peer = addr
+                self.rx_queue.put(("data", session.id, data))
 
     def _set_connected_state(self, connected: bool) -> None:
         text = "关闭连接" if connected else "打开连接"
         self.connect_btn.configure(text=text)
         self.toolbar_connect_btn.configure(text=text)
-        if hasattr(self, "mode_combo"):
-            self.mode_combo.configure(state=tk.DISABLED if connected else "readonly")
 
-    def _apply_line_state(self) -> None:
-        port = self.serial_port
+    def _apply_line_state(self, session: ConnectionSession | None = None) -> None:
+        session = session or self.active_session
+        if session is None:
+            return
+        if session.id == self.active_session_id:
+            session.config["dtr"] = "1" if self.dtr_var.get() else "0"
+            session.config["rts"] = "1" if self.rts_var.get() else "0"
+        port = session.serial_port
         if not port or not getattr(port, "is_open", False):
             return
         try:
-            port.dtr = self.dtr_var.get()
-            port.rts = self.rts_var.get()
+            port.dtr = session.config.get("dtr", "1") == "1"
+            port.rts = session.config.get("rts", "1") == "1"
         except Exception as exc:
             self.status_var.set(f"DTR/RTS 设置失败: {exc}")
 
-    def _reader_loop(self) -> None:
-        port = self.serial_port
-        while port is not None and not self.stop_event.is_set():
+    def _reader_loop(self, session: ConnectionSession) -> None:
+        port = session.serial_port
+        while port is not None and not session.stop_event.is_set():
             try:
                 waiting = getattr(port, "in_waiting", 0)
                 data = port.read(waiting or 1)
                 if data:
-                    self.rx_queue.put(("data", data))
+                    self.rx_queue.put(("data", session.id, data))
             except Exception as exc:
-                if not self.stop_event.is_set():
-                    self.rx_queue.put(("error", str(exc)))
+                if not session.stop_event.is_set():
+                    self.rx_queue.put(("error", session.id, str(exc)))
                 break
 
     def _drain_rx_queue(self) -> None:
         try:
             while True:
-                kind, payload = self.rx_queue.get_nowait()
+                kind, session_id, payload = self.rx_queue.get_nowait()
+                session = self.sessions.get(session_id)
+                if session is None:
+                    continue
                 if kind == "data":
                     data = payload if isinstance(payload, bytes) else bytes(payload)
-                    self.recv_bytes += len(data)
-                    self._append_received_data(data)
+                    session.recv_bytes += len(data)
+                    self._append_received_data(session, data)
                 elif kind == "info":
-                    self._append_system_message(str(payload))
+                    self._append_system_message(session, str(payload))
                 elif kind == "closed":
-                    self._append_system_message(str(payload))
+                    self._append_system_message(session, str(payload))
                     self.status_var.set(str(payload))
-                    self.disconnect_current()
+                    self.disconnect_session(session)
                 elif kind == "error":
                     self.status_var.set(f"连接错误: {payload}")
                     messagebox.showerror("连接错误", str(payload))
-                    self.disconnect_current()
+                    self.disconnect_session(session)
         except queue.Empty:
             pass
 
         self._update_counts()
         self.after(60, self._drain_rx_queue)
 
-    def _append_received_data(self, data: bytes) -> None:
-        display = self._format_received_data(data)
+    def _append_received_data(self, session: ConnectionSession, data: bytes) -> None:
+        display = self._format_received_data(session, data)
         if display and not self.pause_display_var.get():
             self.receive_text.insert(tk.END, display)
             self.receive_text.see(tk.END)
         if display and self.realtime_save_var.get():
             self._append_realtime_file(display)
 
-    def _append_system_message(self, text: str) -> None:
+    def _append_system_message(self, session: ConnectionSession, text: str) -> None:
         now = datetime.now().strftime("%H:%M:%S")
-        display = f"[{now}] {text}\n"
+        display = f"[{now}] [{session.name}] {text}\n"
         if not self.pause_display_var.get():
             self.receive_text.insert(tk.END, display)
             self.receive_text.see(tk.END)
         if self.realtime_save_var.get():
             self._append_realtime_file(display)
 
-    def _format_received_data(self, data: bytes) -> str:
-        prefix = ""
+    def _format_received_data(self, session: ConnectionSession, data: bytes) -> str:
+        prefix_parts = [f"[{session.name}]"]
         if self.timestamp_var.get():
             now = datetime.now()
-            prefix = f"[{now:%H:%M:%S}.{now.microsecond // 1000:03d}] "
+            prefix_parts.insert(0, f"[{now:%H:%M:%S}.{now.microsecond // 1000:03d}]")
+        prefix = " ".join(prefix_parts) + " "
 
         if self.hex_recv_var.get():
             text = bytes_to_hex(data)
@@ -897,12 +1183,13 @@ class SerialDebugTool(tk.Tk):
 
         encoding = self.encoding_var.get() or "utf-8"
         text = data.decode(encoding, errors="replace")
-        return f"{prefix}{text}" if prefix else text
+        return f"{prefix}{text}"
 
     def send_now(self, silent: bool = False) -> None:
-        if not self.is_connected:
+        session = self.active_session
+        if session is None or not session.is_connected:
             if not silent:
-                messagebox.showwarning("串口未打开", "请先打开串口。")
+                messagebox.showwarning("连接未打开", "请先选择并打开一个连接。")
             return
 
         try:
@@ -919,8 +1206,8 @@ class SerialDebugTool(tk.Tk):
             return
 
         try:
-            written, target_text = self._write_payload(data)
-            self.sent_bytes += written
+            written, target_text = self._write_payload(session, data)
+            session.sent_bytes += written
             self._update_counts()
             self.status_var.set(f"已发送 {written} 字节{target_text}")
         except Exception as exc:
@@ -928,18 +1215,18 @@ class SerialDebugTool(tk.Tk):
                 messagebox.showerror("发送失败", str(exc))
             self.status_var.set(f"发送失败: {exc}")
 
-    def _write_payload(self, data: bytes) -> tuple[int, str]:
-        if self.serial_port is not None and getattr(self.serial_port, "is_open", False):
-            written = int(self.serial_port.write(data))
+    def _write_payload(self, session: ConnectionSession, data: bytes) -> tuple[int, str]:
+        if session.serial_port is not None and getattr(session.serial_port, "is_open", False):
+            written = int(session.serial_port.write(data))
             return written, ""
 
-        if self.tcp_socket is not None:
-            self.tcp_socket.sendall(data)
+        if session.tcp_socket is not None:
+            session.tcp_socket.sendall(data)
             return len(data), " 到 TCP 服务端"
 
-        if self.tcp_server_socket is not None:
-            with self.tcp_clients_lock:
-                clients = list(self.tcp_clients)
+        if session.tcp_server_socket is not None:
+            with session.tcp_clients_lock:
+                clients = list(session.tcp_clients)
             if not clients:
                 raise RuntimeError("TCP服务端当前没有已连接客户端")
 
@@ -952,28 +1239,30 @@ class SerialDebugTool(tk.Tk):
                 except Exception:
                     failed_clients.append((client, addr))
             if failed_clients:
-                self._remove_tcp_clients(failed_clients)
+                self._remove_tcp_clients(session, failed_clients)
             if sent_total == 0:
                 raise RuntimeError("TCP客户端发送失败")
             return sent_total, f" 到 {sent_total // len(data)} 个 TCP 客户端"
 
-        if self.udp_socket is not None:
-            if self.mode_var.get() == MODE_UDP_CLIENT:
-                peer = self.udp_default_peer
+        if session.udp_socket is not None:
+            if session.mode == MODE_UDP_CLIENT:
+                peer = session.udp_default_peer
             else:
-                peer = self.udp_peer
+                peer = session.udp_peer
             if peer is None:
-                peer = self._remote_endpoint()
-            written = self.udp_socket.sendto(data, peer)
+                peer = self._remote_endpoint(session)
+            written = session.udp_socket.sendto(data, peer)
             return int(written), f" 到 {peer[0]}:{peer[1]}"
 
         raise RuntimeError("连接未打开")
 
-    def _remove_tcp_clients(self, clients: list[tuple[socket.socket, tuple[str, int]]]) -> None:
+    def _remove_tcp_clients(
+        self, session: ConnectionSession, clients: list[tuple[socket.socket, tuple[str, int]]]
+    ) -> None:
         failed_sockets = {client for client, _addr in clients}
-        with self.tcp_clients_lock:
-            self.tcp_clients = [
-                (client, addr) for client, addr in self.tcp_clients if client not in failed_sockets
+        with session.tcp_clients_lock:
+            session.tcp_clients = [
+                (client, addr) for client, addr in session.tcp_clients if client not in failed_sockets
             ]
         for client, _addr in clients:
             try:
@@ -1086,6 +1375,13 @@ class SerialDebugTool(tk.Tk):
         self.receive_text.delete("1.0", tk.END)
 
     def clear_counts(self) -> None:
+        session = self.active_session
+        targets = [session] if session is not None else list(self.sessions.values())
+        for item in targets:
+            item.sent_bytes = 0
+            item.recv_bytes = 0
+            item.sent_last = 0
+            item.recv_last = 0
         self.sent_bytes = 0
         self.recv_bytes = 0
         self.sent_last = 0
@@ -1108,13 +1404,28 @@ class SerialDebugTool(tk.Tk):
             messagebox.showerror("保存失败", str(exc))
 
     def _update_counts(self) -> None:
-        self.count_var.set(f"发送: {self.sent_bytes} 字节    接收: {self.recv_bytes} 字节")
+        session = self.active_session
+        if session is not None:
+            self.count_var.set(f"发送: {session.sent_bytes} 字节    接收: {session.recv_bytes} 字节")
+            return
+        sent_total = sum(item.sent_bytes for item in self.sessions.values())
+        recv_total = sum(item.recv_bytes for item in self.sessions.values())
+        self.count_var.set(f"发送: {sent_total} 字节    接收: {recv_total} 字节")
 
     def _update_speed(self) -> None:
-        tx_speed = self.sent_bytes - self.sent_last
-        rx_speed = self.recv_bytes - self.recv_last
-        self.sent_last = self.sent_bytes
-        self.recv_last = self.recv_bytes
+        session = self.active_session
+        if session is not None:
+            tx_speed = session.sent_bytes - session.sent_last
+            rx_speed = session.recv_bytes - session.recv_last
+            session.sent_last = session.sent_bytes
+            session.recv_last = session.recv_bytes
+        else:
+            sent_total = sum(item.sent_bytes for item in self.sessions.values())
+            recv_total = sum(item.recv_bytes for item in self.sessions.values())
+            tx_speed = sent_total - self.sent_last
+            rx_speed = recv_total - self.recv_last
+            self.sent_last = sent_total
+            self.recv_last = recv_total
         self.speed_var.set(f"发送速度(B/S): {tx_speed}    接收速度(B/S): {rx_speed}")
         self.after(1000, self._update_speed)
 
@@ -1127,7 +1438,9 @@ class SerialDebugTool(tk.Tk):
         )
 
     def on_close(self) -> None:
-        self.disconnect_current()
+        for session in list(self.sessions.values()):
+            if session.is_connected:
+                self.disconnect_session(session)
         self.destroy()
 
 
