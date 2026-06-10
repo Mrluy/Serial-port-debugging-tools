@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import re
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ except ImportError:
 
 
 APP_TITLE = "COM/TCP/UDP调试工具"
+APP_ICON_PATH = Path("assets") / "app.ico"
 MODE_SERIAL = "COM串口"
 MODE_TCP_CLIENT = "TCP客户端"
 MODE_TCP_SERVER = "TCP服务端"
@@ -70,6 +72,11 @@ def parse_hex_payload(text: str) -> bytes:
     if len(cleaned) % 2:
         raise ValueError("16进制内容长度必须是偶数，例如：4E 57 00")
     return bytes.fromhex(cleaned)
+
+
+def resource_path(relative_path: Path) -> Path:
+    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base_path / relative_path
 
 
 def bytes_to_hex(data: bytes) -> str:
@@ -270,6 +277,7 @@ class SerialDebugTool(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
+        self._set_window_icon()
         self.geometry("1180x760")
         self.minsize(980, 620)
 
@@ -329,6 +337,15 @@ class SerialDebugTool(tk.Tk):
         self.after(60, self._drain_rx_queue)
         self.after(1000, self._update_speed)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def _set_window_icon(self) -> None:
+        icon_path = resource_path(APP_ICON_PATH)
+        if not icon_path.exists():
+            return
+        try:
+            self.iconbitmap(default=str(icon_path))
+        except tk.TclError:
+            pass
 
     def _build_style(self) -> None:
         style = ttk.Style(self)

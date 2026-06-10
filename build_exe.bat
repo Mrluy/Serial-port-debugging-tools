@@ -8,6 +8,8 @@ python -m PyInstaller ^
   --onefile ^
   --windowed ^
   --name "COM串口调试工具" ^
+  --icon "assets\app.ico" ^
+  --add-data "assets\app.ico;assets" ^
   --hidden-import serial.tools.list_ports_windows ^
   main.py
 
