@@ -186,6 +186,12 @@ class SerialDebugTool(tk.Tk):
         style.configure("Status.TLabel", padding=(8, 2))
         style.configure("Pane.TLabelframe", padding=6)
         style.configure("Small.TButton", padding=(8, 2))
+        style.configure("Connection.Treeview", rowheight=20)
+        style.map(
+            "Connection.Treeview",
+            background=[("selected", "#0078D7")],
+            foreground=[("selected", "#FFFFFF")],
+        )
 
     def _create_status_images(self) -> dict[str, tk.PhotoImage]:
         def make_dot(color: str) -> tk.PhotoImage:
@@ -198,10 +204,17 @@ class SerialDebugTool(tk.Tk):
                         image.put(color, (x, y))
             return image
 
-        return {
+        images = {
             "disconnected": make_dot("#2F80ED"),
             "connected": make_dot("#27AE60"),
         }
+        images["mode"] = tk.PhotoImage(width=12, height=12)
+        for x in range(2, 10):
+            for y in range(3, 9):
+                images["mode"].put("#707070", (x, y))
+        for x in range(4, 8):
+            images["mode"].put("#4A4A4A", (x, 10))
+        return images
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
@@ -248,7 +261,7 @@ class SerialDebugTool(tk.Tk):
         self.port_box = ttk.LabelFrame(parent, text="连接列表", style="Pane.TLabelframe")
         self.port_box.pack(fill=tk.BOTH, expand=False)
 
-        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=12)
+        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=12, style="Connection.Treeview")
         self.port_tree.pack(fill=tk.BOTH, expand=True)
         self.port_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.port_tree.bind("<Button-3>", self._show_connection_context_menu)
@@ -320,12 +333,24 @@ class SerialDebugTool(tk.Tk):
     def _build_network_config(self, parent: ttk.Frame) -> ttk.LabelFrame:
         network_box = ttk.LabelFrame(parent, text="网络参数", style="Pane.TLabelframe")
         network_box.columnconfigure(1, weight=1)
+        self.network_rows: dict[str, tuple[ttk.Label, tk.Widget]] = {}
 
-        self._labeled_widget(network_box, 0, "目标IP:", ttk.Entry(network_box, textvariable=self.remote_host_var))
-        self._labeled_widget(network_box, 1, "目标端口:", ttk.Entry(network_box, textvariable=self.remote_port_var))
-        self._labeled_widget(network_box, 2, "本地IP:", ttk.Entry(network_box, textvariable=self.local_host_var))
-        self._labeled_widget(network_box, 3, "本地端口:", ttk.Entry(network_box, textvariable=self.local_port_var))
+        self._network_row(network_box, "remote_host", 0, "目标IP:", ttk.Entry(network_box, textvariable=self.remote_host_var))
+        self._network_row(
+            network_box,
+            "remote_port",
+            1,
+            "目标端口:",
+            ttk.Entry(network_box, textvariable=self.remote_port_var),
+        )
+        self._network_row(network_box, "local_port", 2, "本地端口:", ttk.Entry(network_box, textvariable=self.local_port_var))
         return network_box
+
+    def _network_row(self, parent: ttk.Frame, key: str, row: int, label: str, widget: tk.Widget) -> None:
+        label_widget = ttk.Label(parent, text=label)
+        label_widget.grid(row=row, column=0, sticky=tk.W, pady=2)
+        widget.grid(row=row, column=1, sticky=tk.EW, pady=2)
+        self.network_rows[key] = (label_widget, widget)
 
     def _make_port_selector(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
@@ -352,9 +377,7 @@ class SerialDebugTool(tk.Tk):
     def _apply_mode_defaults(self) -> None:
         mode = self.mode_var.get()
         local_port = self.local_port_var.get().strip()
-        if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT) and local_port == "10123":
-            self.local_port_var.set("0")
-        elif mode in (MODE_TCP_SERVER, MODE_UDP_SERVER) and local_port in ("", "0"):
+        if mode in (MODE_TCP_SERVER, MODE_UDP_SERVER) and local_port in ("", "0"):
             self.local_port_var.set("10123")
 
     def _update_mode_controls(self) -> None:
@@ -366,7 +389,25 @@ class SerialDebugTool(tk.Tk):
         if self.mode_var.get() == MODE_SERIAL:
             self.serial_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connect_btn)
         else:
+            self._update_network_rows()
             self.network_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connect_btn)
+
+    def _update_network_rows(self) -> None:
+        mode = self.mode_var.get()
+        visible_rows = {
+            MODE_TCP_CLIENT: ("remote_host", "remote_port"),
+            MODE_UDP_CLIENT: ("remote_host", "remote_port"),
+            MODE_TCP_SERVER: ("local_port",),
+            MODE_UDP_SERVER: ("local_port",),
+        }.get(mode, ())
+
+        for label, widget in self.network_rows.values():
+            label.grid_remove()
+            widget.grid_remove()
+        for row, key in enumerate(visible_rows):
+            label, widget = self.network_rows[key]
+            label.grid(row=row, column=0, sticky=tk.W, pady=2)
+            widget.grid(row=row, column=1, sticky=tk.EW, pady=2)
 
     def _build_workspace(self, parent: ttk.Frame) -> None:
         self.notebook = ttk.Notebook(parent)
@@ -495,7 +536,9 @@ class SerialDebugTool(tk.Tk):
         self.port_tree.delete(*self.port_tree.get_children())
         self.mode_root_ids.clear()
         for mode in CONNECTION_MODES:
-            self.mode_root_ids[mode] = self.port_tree.insert("", tk.END, text=mode, open=True)
+            self.mode_root_ids[mode] = self.port_tree.insert(
+                "", tk.END, text=mode, image=self.status_images["mode"], open=True
+            )
 
         for session in sorted(self.sessions.values(), key=lambda item: item.id):
             parent = self.mode_root_ids[session.mode]
@@ -568,15 +611,19 @@ class SerialDebugTool(tk.Tk):
         session = self._session_by_tree_id(tree_id)
 
         if mode is not None:
-            menu.add_command(label=f"创建{mode}连接", command=self.create_connection)
-            menu.add_separator()
+            if mode != MODE_SERIAL:
+                menu.add_command(label="创建连接", command=self.create_connection)
+                menu.add_separator()
             menu.add_command(label="刷新连接列表", command=self.refresh_ports)
         elif session is not None:
             if session.is_connected:
-                menu.add_command(label="关闭连接", command=self.disconnect_current)
+                label = "关闭串口" if session.mode == MODE_SERIAL else "关闭连接"
+                menu.add_command(label=label, command=self.disconnect_current)
             else:
-                menu.add_command(label="打开连接", command=self.connect_current)
-            menu.add_command(label=f"新建{session.mode}连接", command=self.create_connection)
+                label = "打开串口" if session.mode == MODE_SERIAL else "打开连接"
+                menu.add_command(label=label, command=self.connect_current)
+            if session.mode != MODE_SERIAL:
+                menu.add_command(label="新建同类型连接", command=self.create_connection)
             menu.add_separator()
             menu.add_command(label="删除连接", command=self.delete_current_connection)
         else:
@@ -605,12 +652,23 @@ class SerialDebugTool(tk.Tk):
 
     def create_connection(self) -> ConnectionSession | None:
         mode = self.mode_var.get()
+        if mode == MODE_SERIAL:
+            messagebox.showwarning("无需创建", "COM串口不需要创建连接，请选择串口后直接打开。")
+            return None
         try:
             config = self._capture_current_config(mode)
         except Exception as exc:
             messagebox.showerror("创建连接失败", str(exc))
             return None
 
+        session = self._new_session(mode, config)
+        self._rebuild_connection_tree()
+        self._set_connected_state(False)
+        self._update_counts()
+        self.status_var.set(f"已创建连接：{session.name}")
+        return session
+
+    def _new_session(self, mode: str, config: dict[str, str]) -> ConnectionSession:
         session = ConnectionSession(
             id=self.next_session_id,
             mode=mode,
@@ -620,10 +678,6 @@ class SerialDebugTool(tk.Tk):
         self.next_session_id += 1
         self.sessions[session.id] = session
         self.active_session_id = session.id
-        self._rebuild_connection_tree()
-        self._set_connected_state(False)
-        self._update_counts()
-        self.status_var.set(f"已创建连接：{session.name}")
         return session
 
     def delete_current_connection(self) -> None:
@@ -658,28 +712,30 @@ class SerialDebugTool(tk.Tk):
                 "rts": "1" if self.rts_var.get() else "0",
             }
 
-        remote_host = self.remote_host_var.get().strip()
-        remote_port = self.remote_port_var.get().strip()
-        local_host = self.local_host_var.get().strip() or "0.0.0.0"
-        local_port = self.local_port_var.get().strip() or "0"
-
         if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT):
+            remote_host = self.remote_host_var.get().strip()
+            remote_port = self.remote_port_var.get().strip()
             if not remote_host:
                 raise ValueError("目标IP不能为空")
             if parse_port(remote_port, "目标端口") == 0:
                 raise ValueError("目标端口不能为 0")
-            parse_port(local_port, "本地端口")
+            return {
+                "remote_host": remote_host,
+                "remote_port": remote_port,
+                "local_host": "0.0.0.0",
+                "local_port": "0",
+            }
         elif mode in (MODE_TCP_SERVER, MODE_UDP_SERVER):
+            local_port = self.local_port_var.get().strip() or "0"
             parse_port(local_port, "本地端口")
+            return {
+                "remote_host": "",
+                "remote_port": "",
+                "local_host": "0.0.0.0",
+                "local_port": local_port,
+            }
         else:
             raise ValueError("未知连接类型")
-
-        return {
-            "remote_host": remote_host,
-            "remote_port": remote_port,
-            "local_host": local_host,
-            "local_port": local_port,
-        }
 
     def _load_session_config(self, session: ConnectionSession) -> None:
         config = session.config
@@ -700,10 +756,10 @@ class SerialDebugTool(tk.Tk):
 
     def _session_label(self, mode: str, config: dict[str, str]) -> str:
         if mode == MODE_SERIAL:
-            return f"{mode} {config.get('port', '')}"
+            return config.get("port", "")
         if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT):
-            return f"{mode} {config.get('remote_host', '')}:{config.get('remote_port', '')}"
-        return f"{mode} {config.get('local_host', '')}:{config.get('local_port', '')}"
+            return f"{config.get('remote_host', '')}:{config.get('remote_port', '')}"
+        return f"本机:{config.get('local_port', '')}"
 
     def _unique_session_name(self, base_name: str) -> str:
         existing = {session.name for session in self.sessions.values()}
@@ -731,8 +787,16 @@ class SerialDebugTool(tk.Tk):
     def connect_current(self) -> None:
         session = self.active_session
         if session is None:
-            messagebox.showwarning("未选择连接", "请先创建并选择一个连接。")
-            return
+            if self.mode_var.get() == MODE_SERIAL:
+                try:
+                    session = self._new_session(MODE_SERIAL, self._capture_current_config(MODE_SERIAL))
+                    self._rebuild_connection_tree()
+                except Exception as exc:
+                    messagebox.showerror("打开串口失败", str(exc))
+                    return
+            else:
+                messagebox.showwarning("未选择连接", "请先在连接列表中右键创建并选择一个连接。")
+                return
         if session.is_connected:
             return
 
@@ -810,7 +874,7 @@ class SerialDebugTool(tk.Tk):
         thread = threading.Thread(target=self._reader_loop, args=(session,), name="serial-reader", daemon=True)
         session.threads.append(thread)
         thread.start()
-        session.name = self._unique_session_name_for_session(session, f"{MODE_SERIAL} {port_name}")
+        session.name = self._unique_session_name_for_session(session, port_name)
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
         self.notebook.tab(0, text=session.name)
@@ -839,7 +903,8 @@ class SerialDebugTool(tk.Tk):
                 )
                 session.threads.append(thread)
                 thread.start()
-                label = f"TCP客户端 {host}:{port}"
+                label = f"{host}:{port}"
+                status_label = f"TCP客户端 {label}"
             elif mode == MODE_TCP_SERVER:
                 host, port = self._local_endpoint(session)
                 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -857,7 +922,8 @@ class SerialDebugTool(tk.Tk):
                 session.threads.append(thread)
                 thread.start()
                 actual_host, actual_port = server.getsockname()
-                label = f"TCP服务端 {actual_host}:{actual_port}"
+                label = f"本机:{actual_port}"
+                status_label = f"TCP服务端 {actual_host}:{actual_port}"
             elif mode == MODE_UDP_CLIENT:
                 host, port = self._remote_endpoint(session)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -873,7 +939,8 @@ class SerialDebugTool(tk.Tk):
                 )
                 session.threads.append(thread)
                 thread.start()
-                label = f"UDP客户端 {host}:{port}"
+                label = f"{host}:{port}"
+                status_label = f"UDP客户端 {label}"
             elif mode == MODE_UDP_SERVER:
                 host, port = self._local_endpoint(session)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -889,7 +956,8 @@ class SerialDebugTool(tk.Tk):
                 session.threads.append(thread)
                 thread.start()
                 actual_host, actual_port = sock.getsockname()
-                label = f"UDP服务端 {actual_host}:{actual_port}"
+                label = f"本机:{actual_port}"
+                status_label = f"UDP服务端 {actual_host}:{actual_port}"
             else:
                 raise ValueError("未知连接模式")
         except Exception as exc:
@@ -902,7 +970,7 @@ class SerialDebugTool(tk.Tk):
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
         self.notebook.tab(0, text=session.name)
-        self.status_var.set(f"{label} 已打开")
+        self.status_var.set(f"{status_label} 已打开")
         self._on_auto_send_toggle()
 
     def _remote_endpoint(self, session: ConnectionSession | None = None) -> tuple[str, int]:
@@ -1079,7 +1147,12 @@ class SerialDebugTool(tk.Tk):
                 self.rx_queue.put(("data", session.id, data))
 
     def _set_connected_state(self, connected: bool) -> None:
-        text = "关闭连接" if connected else "打开连接"
+        session = self.active_session
+        mode = session.mode if session is not None else self.mode_var.get()
+        if mode == MODE_SERIAL:
+            text = "关闭串口" if connected else "打开串口"
+        else:
+            text = "关闭连接" if connected else "打开连接"
         self.connect_btn.configure(text=text)
 
     def _apply_line_state(self, session: ConnectionSession | None = None) -> None:
