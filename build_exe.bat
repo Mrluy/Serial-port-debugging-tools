@@ -3,6 +3,7 @@ cd /d "%~dp0"
 
 python -m pip install -r requirements.txt pyinstaller pillow
 python tools\make_icon.py
+if exist "dist\COM串口调试工具.exe" del /f /q "dist\COM串口调试工具.exe"
 python -m PyInstaller ^
   --noconfirm ^
   --clean ^
