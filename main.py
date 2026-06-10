@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font, messagebox, ttk
 
 try:
     import serial
@@ -114,6 +114,158 @@ class ConnectionSession:
         return any((serial_open, self.tcp_socket, self.tcp_server_socket, self.udp_socket))
 
 
+class ConnectionTree(tk.Canvas):
+    def __init__(self, parent: tk.Widget, height: int = 12) -> None:
+        self.row_height = 20
+        super().__init__(
+            parent,
+            bg="white",
+            height=height * self.row_height,
+            highlightthickness=1,
+            highlightbackground="#C8C8C8",
+        )
+        self._items: dict[str, dict[str, object]] = {}
+        self._children: dict[str, list[str]] = {"": []}
+        self._visible_items: list[tuple[str, int]] = []
+        self._selection: str | None = None
+        self._focus: str | None = None
+        self._next_id = 1
+        self._font = font.nametofont("TkDefaultFont")
+        self.bind("<Button-1>", self._on_click)
+
+    def insert(
+        self,
+        parent: str,
+        _index: str,
+        text: str = "",
+        image: tk.PhotoImage | None = None,
+        open: bool = True,
+    ) -> str:
+        item_id = f"I{self._next_id}"
+        self._next_id += 1
+        self._items[item_id] = {"parent": parent, "text": text, "image": image, "open": open}
+        self._children.setdefault(item_id, [])
+        self._children.setdefault(parent, []).append(item_id)
+        self._redraw()
+        return item_id
+
+    def delete(self, *item_ids: str) -> None:
+        for item_id in item_ids:
+            self._delete_one(item_id)
+        if self._selection not in self._items:
+            self._selection = None
+        self._redraw()
+
+    def _delete_one(self, item_id: str) -> None:
+        for child_id in list(self._children.get(item_id, [])):
+            self._delete_one(child_id)
+        parent = self._items.get(item_id, {}).get("parent", "")
+        if parent in self._children and item_id in self._children[parent]:
+            self._children[parent].remove(item_id)
+        self._children.pop(item_id, None)
+        self._items.pop(item_id, None)
+
+    def get_children(self, item_id: str = "") -> list[str]:
+        return list(self._children.get(item_id, []))
+
+    def item(self, item_id: str, option: str | None = None, **kwargs: object) -> object:
+        item = self._items[item_id]
+        if option == "text":
+            return item["text"]
+        if "text" in kwargs:
+            item["text"] = kwargs["text"]
+        if "image" in kwargs:
+            item["image"] = kwargs["image"]
+        self._redraw()
+        return item
+
+    def selection(self) -> tuple[str, ...]:
+        return (self._selection,) if self._selection else ()
+
+    def selection_set(self, item_id: str) -> None:
+        if item_id not in self._items:
+            return
+        self._selection = item_id
+        self._focus = item_id
+        self._redraw()
+        self.event_generate("<<TreeviewSelect>>")
+
+    def selection_remove(self, item_id: str) -> None:
+        if self._selection == item_id:
+            self._selection = None
+            self._redraw()
+
+    def focus(self, item_id: str | None = None) -> str | None:
+        if item_id is not None:
+            self._focus = item_id
+        return self._focus
+
+    def identify_row(self, y: int) -> str:
+        y_canvas = int(self.canvasy(y))
+        index = y_canvas // self.row_height
+        if 0 <= index < len(self._visible_items):
+            return self._visible_items[index][0]
+        return ""
+
+    def _on_click(self, event: tk.Event) -> None:
+        item_id = self.identify_row(event.y)
+        if item_id:
+            self.selection_set(item_id)
+
+    def _redraw(self) -> None:
+        super().delete("all")
+        self._visible_items = []
+        self._collect_visible("", 0)
+
+        for row, (item_id, depth) in enumerate(self._visible_items):
+            item = self._items[item_id]
+            y = row * self.row_height
+            is_root = item["parent"] == ""
+            indent = 4 + depth * 20
+
+            if is_root:
+                self._draw_expand_box(indent, y)
+                icon_x = indent + 16
+            else:
+                icon_x = indent + 18
+
+            image = item.get("image")
+            if isinstance(image, tk.PhotoImage):
+                self.create_image(icon_x, y + self.row_height // 2, image=image, anchor="w")
+
+            text = str(item.get("text", ""))
+            text_x = icon_x + 18
+            text_y = y + self.row_height // 2
+            if item_id == self._selection:
+                width = self._font.measure(text)
+                self.create_rectangle(
+                    text_x - 2,
+                    y + 2,
+                    text_x + width + 3,
+                    y + self.row_height - 2,
+                    fill="#0078D7",
+                    outline="#0078D7",
+                )
+                fill = "white"
+            else:
+                fill = "black"
+            self.create_text(text_x, text_y, text=text, anchor="w", fill=fill, font=self._font)
+
+        total_height = max(len(self._visible_items) * self.row_height, int(self["height"]))
+        self.configure(scrollregion=(0, 0, 1, total_height))
+
+    def _collect_visible(self, parent: str, depth: int) -> None:
+        for item_id in self._children.get(parent, []):
+            self._visible_items.append((item_id, depth))
+            if self._items[item_id].get("open", True):
+                self._collect_visible(item_id, depth + 1)
+
+    def _draw_expand_box(self, x: int, y: int) -> None:
+        top = y + 6
+        self.create_rectangle(x, top, x + 8, top + 8, fill="white", outline="#7A7A7A")
+        self.create_line(x + 2, top + 4, x + 6, top + 4, fill="#333333")
+
+
 class SerialDebugTool(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -150,7 +302,7 @@ class SerialDebugTool(tk.Tk):
         self.local_port_var = tk.StringVar(value="10123")
 
         self.hex_send_var = tk.BooleanVar(value=False)
-        self.hex_recv_var = tk.BooleanVar(value=True)
+        self.hex_recv_var = tk.BooleanVar(value=False)
         self.send_newline_var = tk.BooleanVar(value=False)
         self.auto_send_var = tk.BooleanVar(value=False)
         self.interval_var = tk.StringVar(value="1000")
@@ -186,12 +338,6 @@ class SerialDebugTool(tk.Tk):
         style.configure("Status.TLabel", padding=(8, 2))
         style.configure("Pane.TLabelframe", padding=6)
         style.configure("Small.TButton", padding=(8, 2))
-        style.configure("Connection.Treeview", rowheight=20)
-        style.map(
-            "Connection.Treeview",
-            background=[("selected", "#0078D7")],
-            foreground=[("selected", "#FFFFFF")],
-        )
 
     def _create_status_images(self) -> dict[str, tk.PhotoImage]:
         def make_dot(color: str) -> tk.PhotoImage:
@@ -261,7 +407,7 @@ class SerialDebugTool(tk.Tk):
         self.port_box = ttk.LabelFrame(parent, text="连接列表", style="Pane.TLabelframe")
         self.port_box.pack(fill=tk.BOTH, expand=False)
 
-        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=12, style="Connection.Treeview")
+        self.port_tree = ConnectionTree(self.port_box, height=12)
         self.port_tree.pack(fill=tk.BOTH, expand=True)
         self.port_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.port_tree.bind("<Button-3>", self._show_connection_context_menu)
@@ -320,8 +466,11 @@ class SerialDebugTool(tk.Tk):
 
         self.network_config_box = self._build_network_config(parent)
 
-        self.connect_btn = ttk.Button(parent, text="打开连接", command=self.toggle_connection)
-        self.connect_btn.pack(fill=tk.X, pady=(8, 0))
+        self.connection_button_bar = ttk.Frame(parent)
+        self.connection_button_bar.pack(fill=tk.X, pady=(8, 0))
+        self.create_btn = ttk.Button(self.connection_button_bar, text="创建连接", command=self.create_connection)
+        self.connect_btn = ttk.Button(self.connection_button_bar, text="打开连接", command=self.toggle_connection)
+        self._update_connection_buttons()
 
         count_box = ttk.LabelFrame(parent, text="计数", style="Pane.TLabelframe")
         count_box.pack(fill=tk.X, pady=(8, 0))
@@ -387,10 +536,23 @@ class SerialDebugTool(tk.Tk):
         self.serial_config_box.pack_forget()
         self.network_config_box.pack_forget()
         if self.mode_var.get() == MODE_SERIAL:
-            self.serial_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connect_btn)
+            self.serial_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connection_button_bar)
         else:
             self._update_network_rows()
-            self.network_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connect_btn)
+            self.network_config_box.pack(fill=tk.X, pady=(8, 0), before=self.connection_button_bar)
+        self._update_connection_buttons()
+
+    def _update_connection_buttons(self) -> None:
+        if not hasattr(self, "create_btn") or not hasattr(self, "connect_btn"):
+            return
+        for child in self.connection_button_bar.winfo_children():
+            child.pack_forget()
+
+        if self.mode_var.get() != MODE_SERIAL:
+            self.create_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
+            self.connect_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
+        else:
+            self.connect_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     def _update_network_rows(self) -> None:
         mode = self.mode_var.get()
@@ -611,9 +773,6 @@ class SerialDebugTool(tk.Tk):
         session = self._session_by_tree_id(tree_id)
 
         if mode is not None:
-            if mode != MODE_SERIAL:
-                menu.add_command(label="创建连接", command=self.create_connection)
-                menu.add_separator()
             menu.add_command(label="刷新连接列表", command=self.refresh_ports)
         elif session is not None:
             if session.is_connected:
@@ -622,8 +781,6 @@ class SerialDebugTool(tk.Tk):
             else:
                 label = "打开串口" if session.mode == MODE_SERIAL else "打开连接"
                 menu.add_command(label=label, command=self.connect_current)
-            if session.mode != MODE_SERIAL:
-                menu.add_command(label="新建同类型连接", command=self.create_connection)
             menu.add_separator()
             menu.add_command(label="删除连接", command=self.delete_current_connection)
         else:
@@ -795,7 +952,7 @@ class SerialDebugTool(tk.Tk):
                     messagebox.showerror("打开串口失败", str(exc))
                     return
             else:
-                messagebox.showwarning("未选择连接", "请先在连接列表中右键创建并选择一个连接。")
+                messagebox.showwarning("未选择连接", "请先点击创建连接按钮，并在连接列表中选择一个连接。")
                 return
         if session.is_connected:
             return
@@ -1154,6 +1311,7 @@ class SerialDebugTool(tk.Tk):
         else:
             text = "关闭连接" if connected else "打开连接"
         self.connect_btn.configure(text=text)
+        self._update_connection_buttons()
 
     def _apply_line_state(self, session: ConnectionSession | None = None) -> None:
         session = session or self.active_session
