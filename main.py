@@ -44,6 +44,7 @@ PARITY_OPTIONS = {
 }
 FLOW_OPTIONS = ("无", "RTS/CTS", "XON/XOFF", "DSR/DTR")
 ENCODINGS = ("utf-8", "gbk", "ascii", "latin-1")
+DEFAULT_SEND_TEXT = "4E 57 00 13 00 00 00 00 06 02 00 00 00 00 00 00 68 00 00 01 28"
 
 
 def parse_hex_payload(text: str) -> bytes:
@@ -95,7 +96,7 @@ class SerialDebugTool(tk.Tk):
         self.dtr_var = tk.BooleanVar(value=True)
         self.rts_var = tk.BooleanVar(value=True)
 
-        self.hex_send_var = tk.BooleanVar(value=False)
+        self.hex_send_var = tk.BooleanVar(value=True)
         self.hex_recv_var = tk.BooleanVar(value=True)
         self.send_newline_var = tk.BooleanVar(value=False)
         self.auto_send_var = tk.BooleanVar(value=False)
@@ -327,7 +328,7 @@ class SerialDebugTool(tk.Tk):
 
         self.send_text = tk.Text(parent, height=8, wrap=tk.NONE, undo=True)
         self.send_text.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
-        self.send_text.insert("1.0", "4E 57 00 13 00 00 00 00 06 02 00 00 00 00 00 00 68 00 00 01 28")
+        self.send_text.insert("1.0", DEFAULT_SEND_TEXT)
 
         self._toggle_file_send_controls()
 

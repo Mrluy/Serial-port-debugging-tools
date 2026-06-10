@@ -45,4 +45,4 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name "COM串口
 0x4E 0x57 0x00 0x13
 ```
 
-开启 `16进制` 发送时，程序会按字节发送；关闭时会按选择的编码发送文本。
+默认示例帧会开启 `16进制` 发送。开启 `16进制` 发送时，程序会按字节发送；关闭时会按选择的编码发送文本。
