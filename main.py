@@ -169,7 +169,6 @@ class SerialDebugTool(tk.Tk):
 
         self._build_style()
         self._build_menu()
-        self._build_toolbar()
         self._build_body()
         self._build_status_bar()
 
@@ -233,34 +232,6 @@ class SerialDebugTool(tk.Tk):
 
         self.config(menu=menu_bar)
 
-    def _build_toolbar(self) -> None:
-        toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=(6, 4))
-        toolbar.pack(side=tk.TOP, fill=tk.X)
-
-        ttk.Button(toolbar, text="刷新列表", style="Small.TButton", command=self.refresh_ports).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-        ttk.Button(toolbar, text="创建连接", style="Small.TButton", command=self.create_connection).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-        ttk.Button(toolbar, text="删除连接", style="Small.TButton", command=self.delete_current_connection).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-        self.toolbar_connect_btn = ttk.Button(
-            toolbar, text="打开连接", style="Small.TButton", command=self.toggle_connection
-        )
-        self.toolbar_connect_btn.pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        ttk.Button(toolbar, text="清空接收", style="Small.TButton", command=self.clear_receive).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-        ttk.Button(toolbar, text="保存接收", style="Small.TButton", command=self.save_receive).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-        ttk.Button(toolbar, text="清空计数", style="Small.TButton", command=self.clear_counts).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-
     def _build_body(self) -> None:
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
@@ -274,35 +245,13 @@ class SerialDebugTool(tk.Tk):
         self._build_workspace(right)
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
-        mode_box = ttk.LabelFrame(parent, text="连接类型", style="Pane.TLabelframe")
-        mode_box.pack(fill=tk.X)
-        mode_box.columnconfigure(0, weight=1)
-        self.mode_combo = ttk.Combobox(
-            mode_box,
-            textvariable=self.mode_var,
-            values=CONNECTION_MODES,
-            state="readonly",
-            width=16,
-        )
-        self.mode_combo.grid(row=0, column=0, sticky=tk.EW)
-        self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_change)
-        mode_buttons = ttk.Frame(mode_box)
-        mode_buttons.grid(row=1, column=0, sticky=tk.EW, pady=(6, 0))
-        mode_buttons.columnconfigure(0, weight=1)
-        mode_buttons.columnconfigure(1, weight=1)
-        ttk.Button(mode_buttons, text="创建", command=self.create_connection).grid(
-            row=0, column=0, sticky=tk.EW, padx=(0, 3)
-        )
-        ttk.Button(mode_buttons, text="删除", command=self.delete_current_connection).grid(
-            row=0, column=1, sticky=tk.EW, padx=(3, 0)
-        )
-
         self.port_box = ttk.LabelFrame(parent, text="连接列表", style="Pane.TLabelframe")
-        self.port_box.pack(fill=tk.BOTH, expand=False, pady=(8, 0))
+        self.port_box.pack(fill=tk.BOTH, expand=False)
 
-        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=10)
+        self.port_tree = ttk.Treeview(self.port_box, show="tree", height=12)
         self.port_tree.pack(fill=tk.BOTH, expand=True)
         self.port_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.port_tree.bind("<Button-3>", self._show_connection_context_menu)
 
         config_box = ttk.LabelFrame(parent, text="串口参数", style="Pane.TLabelframe")
         self.serial_config_box = config_box
@@ -604,6 +553,43 @@ class SerialDebugTool(tk.Tk):
             self.mode_var.set(MODE_SERIAL)
             self._on_mode_change()
             self.port_var.set(match.group(1).upper())
+
+    def _show_connection_context_menu(self, event: tk.Event) -> None:
+        tree_id = self.port_tree.identify_row(event.y)
+        if not tree_id:
+            return
+
+        self.port_tree.selection_set(tree_id)
+        self.port_tree.focus(tree_id)
+        self._on_tree_select(event)
+
+        menu = tk.Menu(self, tearoff=False)
+        mode = self._mode_by_root_id(tree_id)
+        session = self._session_by_tree_id(tree_id)
+
+        if mode is not None:
+            menu.add_command(label=f"创建{mode}连接", command=self.create_connection)
+            menu.add_separator()
+            menu.add_command(label="刷新连接列表", command=self.refresh_ports)
+        elif session is not None:
+            if session.is_connected:
+                menu.add_command(label="关闭连接", command=self.disconnect_current)
+            else:
+                menu.add_command(label="打开连接", command=self.connect_current)
+            menu.add_command(label=f"新建{session.mode}连接", command=self.create_connection)
+            menu.add_separator()
+            menu.add_command(label="删除连接", command=self.delete_current_connection)
+        else:
+            return
+
+        menu.tk_popup(event.x_root, event.y_root)
+        menu.grab_release()
+
+    def _mode_by_root_id(self, tree_id: str) -> str | None:
+        for mode, root_id in self.mode_root_ids.items():
+            if root_id == tree_id:
+                return mode
+        return None
 
     def _session_by_tree_id(self, tree_id: str) -> ConnectionSession | None:
         for session in self.sessions.values():
@@ -1095,7 +1081,6 @@ class SerialDebugTool(tk.Tk):
     def _set_connected_state(self, connected: bool) -> None:
         text = "关闭连接" if connected else "打开连接"
         self.connect_btn.configure(text=text)
-        self.toolbar_connect_btn.configure(text=text)
 
     def _apply_line_state(self, session: ConnectionSession | None = None) -> None:
         session = session or self.active_session
