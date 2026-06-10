@@ -326,7 +326,7 @@ class SerialDebugTool(tk.Tk):
         self.send_file_btn = ttk.Button(file_bar, text="...", width=4, command=self.choose_send_file)
         self.send_file_btn.grid(row=0, column=2)
 
-        self.send_text = tk.Text(parent, height=8, wrap=tk.NONE, undo=True)
+        self.send_text = tk.Text(parent, height=8, wrap=tk.CHAR, undo=True)
         self.send_text.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
         self.send_text.insert("1.0", DEFAULT_SEND_TEXT)
 
@@ -364,13 +364,11 @@ class SerialDebugTool(tk.Tk):
         receive_frame.rowconfigure(0, weight=1)
         receive_frame.columnconfigure(0, weight=1)
 
-        self.receive_text = tk.Text(receive_frame, wrap=tk.NONE)
+        self.receive_text = tk.Text(receive_frame, wrap=tk.CHAR)
         self.receive_text.grid(row=0, column=0, sticky=tk.NSEW)
         y_scroll = ttk.Scrollbar(receive_frame, orient=tk.VERTICAL, command=self.receive_text.yview)
-        x_scroll = ttk.Scrollbar(receive_frame, orient=tk.HORIZONTAL, command=self.receive_text.xview)
         y_scroll.grid(row=0, column=1, sticky=tk.NS)
-        x_scroll.grid(row=1, column=0, sticky=tk.EW)
-        self.receive_text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        self.receive_text.configure(yscrollcommand=y_scroll.set)
 
     def _build_status_bar(self) -> None:
         status = ttk.Frame(self)
