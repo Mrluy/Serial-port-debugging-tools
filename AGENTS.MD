@@ -6,4 +6,5 @@
 - The application version is stored in `APP_VERSION` in `main.py`; keep user-facing documentation such as `README.md` in sync when the displayed version changes.
 - When the user asks to upload the program or a version to the remote GitHub project, publish it as a GitHub Releases asset, not as a file committed to the repository tree.
 - Before uploading a release asset, compress `dist/COM串口调试工具.exe` into `Serial-port-debugging-tools.zip`, then upload that zip archive to the matching GitHub Release. Do not upload the `.exe` directly, and do not commit the release zip to the repository.
+- When creating or updating a GitHub Release for an upload request, do not add release notes, remarks, or a description; leave the release body empty and only attach the zip asset.
 - Do not commit generated release artifacts such as `dist/*.exe` or `Serial-port-debugging-tools.zip` to the repository; keep them local or attach them to GitHub Releases only.
