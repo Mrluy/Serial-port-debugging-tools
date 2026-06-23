@@ -26,7 +26,7 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 CONFIG_DIR_NAME = "Serial-port-debugging-tools"
@@ -378,7 +378,6 @@ class SerialDebugTool(tk.Tk):
         self.send_file_path_var = tk.StringVar()
 
         self.pause_display_var = tk.BooleanVar(value=False)
-        self.timestamp_var = tk.BooleanVar(value=False)
         self.realtime_save_var = tk.BooleanVar(value=False)
         self.realtime_path_var = tk.StringVar()
 
@@ -666,8 +665,8 @@ class SerialDebugTool(tk.Tk):
 
         session = ttk.Frame(self.notebook, padding=6)
         self.notebook.add(session, text="串口会话")
-        session.rowconfigure(2, weight=2)
-        session.rowconfigure(6, weight=3)
+        session.rowconfigure(2, weight=1)
+        session.rowconfigure(6, weight=1)
         session.columnconfigure(0, weight=1)
 
         self._build_send_area(session)
@@ -726,8 +725,40 @@ class SerialDebugTool(tk.Tk):
         self.send_file_btn = ttk.Button(file_bar, text="...", width=4, command=self.choose_send_file)
         self.send_file_btn.grid(row=0, column=2)
 
-        self.send_text = tk.Text(parent, height=8, wrap=tk.CHAR, undo=True)
-        self.send_text.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
+        send_frame = ttk.Frame(parent)
+        send_frame.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
+        send_frame.rowconfigure(1, weight=1)
+        send_frame.columnconfigure(2, weight=1)
+
+        ttk.Label(send_frame, text="时间", anchor=tk.W).grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(send_frame, text="连接", anchor=tk.W).grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(send_frame, text="数据", anchor=tk.W).grid(row=0, column=2, sticky=tk.EW)
+
+        self.send_time_text = tk.Text(send_frame, width=14, wrap=tk.NONE)
+        self.send_connection_text = tk.Text(send_frame, width=20, wrap=tk.NONE)
+        self.send_history_text = tk.Text(send_frame, wrap=tk.NONE)
+        self.send_time_text.grid(row=1, column=0, sticky=tk.NSEW, padx=(0, 4))
+        self.send_connection_text.grid(row=1, column=1, sticky=tk.NSEW, padx=(0, 4))
+        self.send_history_text.grid(row=1, column=2, sticky=tk.NSEW)
+
+        send_y_scroll = ttk.Scrollbar(send_frame, orient=tk.VERTICAL, command=self._send_yview)
+        send_y_scroll.grid(row=1, column=3, sticky=tk.NS)
+        send_x_scroll = ttk.Scrollbar(send_frame, orient=tk.HORIZONTAL, command=self.send_history_text.xview)
+        send_x_scroll.grid(row=2, column=2, sticky=tk.EW)
+        self.send_history_text.configure(yscrollcommand=send_y_scroll.set, xscrollcommand=send_x_scroll.set)
+
+        ttk.Label(send_frame, text="发送内容", anchor=tk.W).grid(
+            row=3, column=0, columnspan=4, sticky=tk.EW, pady=(6, 2)
+        )
+        self.send_text = tk.Text(send_frame, height=4, wrap=tk.CHAR, undo=True)
+        self.send_text.grid(row=4, column=0, columnspan=4, sticky=tk.EW)
+        self.send_history_widgets = (self.send_time_text, self.send_connection_text, self.send_history_text)
+        for widget in self.send_history_widgets:
+            widget.configure(state=tk.DISABLED)
+            widget.bind("<MouseWheel>", self._on_send_mousewheel)
+            widget.bind("<Button-4>", self._on_send_mousewheel)
+            widget.bind("<Button-5>", self._on_send_mousewheel)
+            self._install_text_context_menu(widget, editable=False)
         self._install_text_context_menu(self.send_text, editable=True)
 
         self._toggle_file_send_controls()
@@ -745,7 +776,6 @@ class SerialDebugTool(tk.Tk):
         ttk.Button(receive_toolbar, text="清空", command=self.clear_receive, width=8).grid(row=0, column=2, padx=2)
         ttk.Button(receive_toolbar, text="保存", command=self.save_receive, width=8).grid(row=0, column=3, padx=2)
         ttk.Checkbutton(receive_toolbar, text="16进制", variable=self.hex_recv_var).grid(row=0, column=4, padx=2)
-        ttk.Checkbutton(receive_toolbar, text="时间戳", variable=self.timestamp_var).grid(row=0, column=5, padx=2)
 
         save_bar = ttk.Frame(parent)
         save_bar.grid(row=5, column=0, sticky=tk.EW, pady=(5, 4))
@@ -840,6 +870,18 @@ class SerialDebugTool(tk.Tk):
         self._receive_yview("scroll", units, "units")
         return "break"
 
+    def _send_yview(self, *args: object) -> None:
+        for widget in getattr(self, "send_history_widgets", ()):
+            widget.yview(*args)
+
+    def _on_send_mousewheel(self, event: tk.Event) -> str:
+        if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+            units = -1
+        else:
+            units = 1
+        self._send_yview("scroll", units, "units")
+        return "break"
+
     def _build_status_bar(self) -> None:
         status = ttk.Frame(self)
         status.pack(side=tk.BOTTOM, fill=tk.X)
@@ -883,7 +925,6 @@ class SerialDebugTool(tk.Tk):
             self.send_file_var,
             self.send_file_path_var,
             self.pause_display_var,
-            self.timestamp_var,
             self.realtime_save_var,
             self.realtime_path_var,
         )
@@ -960,7 +1001,6 @@ class SerialDebugTool(tk.Tk):
             "receive": {
                 "hex_recv": self.hex_recv_var.get(),
                 "pause_display": self.pause_display_var.get(),
-                "timestamp": self.timestamp_var.get(),
                 "realtime_save": self.realtime_save_var.get(),
                 "realtime_path": self.realtime_path_var.get(),
             },
@@ -1012,7 +1052,6 @@ class SerialDebugTool(tk.Tk):
             "receive": {
                 "hex_recv": False,
                 "pause_display": False,
-                "timestamp": False,
                 "realtime_save": False,
                 "realtime_path": "",
             },
@@ -1058,7 +1097,6 @@ class SerialDebugTool(tk.Tk):
             receive_config = self._config_section(data, "receive")
             self.hex_recv_var.set(config_bool(receive_config.get("hex_recv"), False))
             self.pause_display_var.set(config_bool(receive_config.get("pause_display"), False))
-            self.timestamp_var.set(config_bool(receive_config.get("timestamp"), False))
             self.realtime_save_var.set(config_bool(receive_config.get("realtime_save"), False))
             self._set_string_var(self.realtime_path_var, receive_config.get("realtime_path"), "")
 
@@ -1944,18 +1982,30 @@ class SerialDebugTool(tk.Tk):
         display = self._format_received_data(data)
         if not display:
             return
-        timestamp = self._receive_timestamp() if self.timestamp_var.get() else ""
+        timestamp = self._log_timestamp()
         if not self.pause_display_var.get():
             self._append_receive_record(timestamp, session.name, display)
         if self.realtime_save_var.get():
             self._append_realtime_file(self._format_receive_record_for_file(timestamp, session.name, display))
 
     def _append_system_message(self, session: ConnectionSession, text: str) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = self._log_timestamp()
         if not self.pause_display_var.get():
             self._append_receive_record(timestamp, session.name, text)
         if self.realtime_save_var.get():
             self._append_realtime_file(self._format_receive_record_for_file(timestamp, session.name, text))
+
+    def _append_sent_data(self, session: ConnectionSession, data: bytes) -> None:
+        display = self._format_sent_data(data)
+        if not display:
+            return
+        self._append_send_record(self._log_timestamp(), session.name, display)
+
+    def _format_sent_data(self, data: bytes) -> str:
+        if self.hex_send_var.get():
+            return bytes_to_hex(data)
+        encoding = self.encoding_var.get() or "utf-8"
+        return data.decode(encoding, errors="replace")
 
     def _format_received_data(self, data: bytes) -> str:
         if self.hex_recv_var.get():
@@ -1964,9 +2014,23 @@ class SerialDebugTool(tk.Tk):
         encoding = self.encoding_var.get() or "utf-8"
         return data.decode(encoding, errors="replace")
 
-    def _receive_timestamp(self) -> str:
+    def _log_timestamp(self) -> str:
         now = datetime.now()
         return f"{now:%H:%M:%S}.{now.microsecond // 1000:03d}"
+
+    def _append_send_record(self, timestamp: str, connection: str, data: str) -> None:
+        data_text = self._receive_data_with_newline(data)
+        row_count = max(1, data_text.count("\n"))
+        time_text = self._metadata_column_text(timestamp, row_count)
+        connection_text = self._metadata_column_text(connection, row_count)
+
+        self._set_send_widgets_state(tk.NORMAL)
+        self.send_time_text.insert(tk.END, time_text)
+        self.send_connection_text.insert(tk.END, connection_text)
+        self.send_history_text.insert(tk.END, data_text)
+        self._set_send_widgets_state(tk.DISABLED)
+        for widget in self.send_history_widgets:
+            widget.see(tk.END)
 
     def _append_receive_record(self, timestamp: str, connection: str, data: str) -> None:
         data_text = self._receive_data_with_newline(data)
@@ -1991,6 +2055,10 @@ class SerialDebugTool(tk.Tk):
 
     def _set_receive_widgets_state(self, state: str) -> None:
         for widget in getattr(self, "receive_widgets", ()):
+            widget.configure(state=state)
+
+    def _set_send_widgets_state(self, state: str) -> None:
+        for widget in getattr(self, "send_history_widgets", ()):
             widget.configure(state=state)
 
     def _format_receive_record_for_file(self, timestamp: str, connection: str, data: str) -> str:
@@ -2027,6 +2095,7 @@ class SerialDebugTool(tk.Tk):
             written, target_text = self._write_payload(session, data)
             if crc_appended and should_update_send_area:
                 self._write_full_payload_to_send_area(data)
+            self._append_sent_data(session, data)
             session.sent_bytes += written
             self._update_counts()
             crc_text = "，已自动追加CRC" if crc_appended else ""
@@ -2217,6 +2286,10 @@ class SerialDebugTool(tk.Tk):
 
     def clear_send(self) -> None:
         self.send_text.delete("1.0", tk.END)
+        self._set_send_widgets_state(tk.NORMAL)
+        for widget in self.send_history_widgets:
+            widget.delete("1.0", tk.END)
+        self._set_send_widgets_state(tk.DISABLED)
 
     def clear_receive(self) -> None:
         self._set_receive_widgets_state(tk.NORMAL)
