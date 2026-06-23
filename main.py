@@ -23,7 +23,9 @@ except ImportError:
     HAS_PYSERIAL = False
 
 
-APP_TITLE = "COM/TCP/UDP调试工具"
+APP_NAME = "COM/TCP/UDP调试工具"
+APP_VERSION = "1.0.0"
+APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 MODE_SERIAL = "COM串口"
 MODE_TCP_CLIENT = "TCP客户端"
@@ -1726,7 +1728,7 @@ class SerialDebugTool(tk.Tk):
     def show_about(self) -> None:
         messagebox.showinfo(
             "关于",
-            "本地COM串口调试工具\n\n"
+            f"{APP_NAME}\n版本: v{APP_VERSION}\n\n"
             "支持本机 COM 串口、TCP客户端、TCP服务端、UDP客户端、UDP服务端，"
             "可进行文本/16进制发送、自动发送、接收显示、实时保存和收发计数。",
         )

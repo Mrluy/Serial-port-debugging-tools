@@ -1,6 +1,12 @@
 import unittest
 
-from main import append_crc16_modbus_if_missing, calculate_crc16_modbus, parse_hex_payload, parse_port
+from main import (
+    APP_VERSION,
+    append_crc16_modbus_if_missing,
+    calculate_crc16_modbus,
+    parse_hex_payload,
+    parse_port,
+)
 
 
 class HexPayloadTests(unittest.TestCase):
@@ -33,6 +39,13 @@ class NetworkPortTests(unittest.TestCase):
     def test_port_rejects_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
             parse_port("65536", "目标端口")
+
+
+class VersionTests(unittest.TestCase):
+    def test_app_version_uses_semantic_version_format(self) -> None:
+        parts = APP_VERSION.split(".")
+        self.assertEqual(len(parts), 3)
+        self.assertTrue(all(part.isdigit() for part in parts))
 
 
 if __name__ == "__main__":
