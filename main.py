@@ -26,7 +26,7 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 CONFIG_DIR_NAME = "Serial-port-debugging-tools"
@@ -1910,7 +1910,7 @@ class SerialDebugTool(tk.Tk):
             return
 
         try:
-            data, crc_appended = self._build_send_payload()
+            data, crc_appended, should_update_send_area = self._build_send_payload()
         except Exception as exc:
             if not silent:
                 messagebox.showerror("发送内容错误", str(exc))
@@ -1924,6 +1924,8 @@ class SerialDebugTool(tk.Tk):
 
         try:
             written, target_text = self._write_payload(session, data)
+            if crc_appended and should_update_send_area:
+                self._write_full_payload_to_send_area(data)
             session.sent_bytes += written
             self._update_counts()
             crc_text = "，已自动追加CRC" if crc_appended else ""
@@ -1988,7 +1990,7 @@ class SerialDebugTool(tk.Tk):
             except Exception:
                 pass
 
-    def _build_send_payload(self) -> tuple[bytes, bool]:
+    def _build_send_payload(self) -> tuple[bytes, bool, bool]:
         if self.send_file_var.get():
             path_text = self.send_file_path_var.get().strip()
             if not path_text:
@@ -1997,6 +1999,7 @@ class SerialDebugTool(tk.Tk):
             if not path.is_file():
                 raise ValueError("发送文件不存在")
             data = path.read_bytes()
+            should_update_send_area = False
         else:
             text = self.send_text.get("1.0", "end-1c")
             if self.hex_send_var.get():
@@ -2006,8 +2009,10 @@ class SerialDebugTool(tk.Tk):
                     text += "\r\n"
                 encoding = self.encoding_var.get() or "utf-8"
                 data = text.encode(encoding, errors="replace")
+            should_update_send_area = True
 
-        return self._apply_auto_crc(data)
+        data, crc_appended = self._apply_auto_crc(data)
+        return data, crc_appended, should_update_send_area
 
     def _apply_auto_crc(self, data: bytes) -> tuple[bytes, bool]:
         if not self.auto_crc_var.get() or not data:
@@ -2017,6 +2022,13 @@ class SerialDebugTool(tk.Tk):
         if algorithm != CRC_ALGORITHM_MODBUS:
             raise ValueError(f"暂不支持 CRC 算法: {algorithm}")
         return append_crc16_modbus_if_missing(data)
+
+    def _write_full_payload_to_send_area(self, data: bytes) -> None:
+        if not self.hex_send_var.get():
+            self.hex_send_var.set(True)
+        self.send_text.delete("1.0", tk.END)
+        self.send_text.insert("1.0", bytes_to_hex(data))
+        self._schedule_config_save()
 
     def _on_auto_send_toggle(self) -> None:
         if self.auto_send_var.get() and self.is_connected:
