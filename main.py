@@ -26,7 +26,7 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 CONFIG_DIR_NAME = "Serial-port-debugging-tools"
@@ -728,6 +728,7 @@ class SerialDebugTool(tk.Tk):
 
         self.send_text = tk.Text(parent, height=8, wrap=tk.CHAR, undo=True)
         self.send_text.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
+        self._install_text_context_menu(self.send_text, editable=True)
 
         self._toggle_file_send_controls()
         self._toggle_crc_controls()
@@ -761,14 +762,83 @@ class SerialDebugTool(tk.Tk):
 
         receive_frame = ttk.Frame(parent)
         receive_frame.grid(row=6, column=0, sticky=tk.NSEW)
-        receive_frame.rowconfigure(0, weight=1)
-        receive_frame.columnconfigure(0, weight=1)
+        receive_frame.rowconfigure(1, weight=1)
+        receive_frame.columnconfigure(2, weight=1)
 
-        self.receive_text = tk.Text(receive_frame, wrap=tk.CHAR)
-        self.receive_text.grid(row=0, column=0, sticky=tk.NSEW)
-        y_scroll = ttk.Scrollbar(receive_frame, orient=tk.VERTICAL, command=self.receive_text.yview)
-        y_scroll.grid(row=0, column=1, sticky=tk.NS)
-        self.receive_text.configure(yscrollcommand=y_scroll.set)
+        ttk.Label(receive_frame, text="时间", anchor=tk.W).grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(receive_frame, text="连接", anchor=tk.W).grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(receive_frame, text="数据", anchor=tk.W).grid(row=0, column=2, sticky=tk.EW)
+
+        self.receive_time_text = tk.Text(receive_frame, width=14, wrap=tk.NONE)
+        self.receive_connection_text = tk.Text(receive_frame, width=20, wrap=tk.NONE)
+        self.receive_text = tk.Text(receive_frame, wrap=tk.NONE)
+        self.receive_time_text.grid(row=1, column=0, sticky=tk.NSEW, padx=(0, 4))
+        self.receive_connection_text.grid(row=1, column=1, sticky=tk.NSEW, padx=(0, 4))
+        self.receive_text.grid(row=1, column=2, sticky=tk.NSEW)
+
+        y_scroll = ttk.Scrollbar(receive_frame, orient=tk.VERTICAL, command=self._receive_yview)
+        y_scroll.grid(row=1, column=3, sticky=tk.NS)
+        x_scroll = ttk.Scrollbar(receive_frame, orient=tk.HORIZONTAL, command=self.receive_text.xview)
+        x_scroll.grid(row=2, column=2, sticky=tk.EW)
+        self.receive_text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        self.receive_widgets = (self.receive_time_text, self.receive_connection_text, self.receive_text)
+        for widget in self.receive_widgets:
+            widget.configure(state=tk.DISABLED)
+            widget.bind("<MouseWheel>", self._on_receive_mousewheel)
+            widget.bind("<Button-4>", self._on_receive_mousewheel)
+            widget.bind("<Button-5>", self._on_receive_mousewheel)
+            self._install_text_context_menu(widget, editable=False)
+
+    def _install_text_context_menu(self, widget: tk.Text, editable: bool) -> None:
+        widget.bind("<Button-3>", lambda event, item=widget, can_edit=editable: self._show_text_context_menu(event, item, can_edit))
+
+    def _show_text_context_menu(self, event: tk.Event, widget: tk.Text, editable: bool) -> str:
+        widget.focus_set()
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(label="复制", command=lambda: self._copy_text_selection(widget))
+        if editable:
+            menu.add_command(label="剪切", command=lambda: self._cut_text_selection(widget))
+            menu.add_command(label="粘贴", command=lambda: self._paste_text_clipboard(widget))
+        menu.tk_popup(event.x_root, event.y_root)
+        menu.grab_release()
+        return "break"
+
+    def _copy_text_selection(self, widget: tk.Text) -> None:
+        try:
+            selected = widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+        except tk.TclError:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(selected)
+
+    def _cut_text_selection(self, widget: tk.Text) -> None:
+        try:
+            selected = widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+        except tk.TclError:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(selected)
+        widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+
+    def _paste_text_clipboard(self, widget: tk.Text) -> None:
+        try:
+            text = self.clipboard_get()
+        except tk.TclError:
+            return
+        widget.insert(tk.INSERT, text)
+
+    def _receive_yview(self, *args: object) -> None:
+        for widget in getattr(self, "receive_widgets", ()):
+            widget.yview(*args)
+
+    def _on_receive_mousewheel(self, event: tk.Event) -> str:
+        if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+            units = -1
+        else:
+            units = 1
+        self._receive_yview("scroll", units, "units")
+        return "break"
 
     def _build_status_bar(self) -> None:
         status = ttk.Frame(self)
@@ -1871,36 +1941,67 @@ class SerialDebugTool(tk.Tk):
         self.after(60, self._drain_rx_queue)
 
     def _append_received_data(self, session: ConnectionSession, data: bytes) -> None:
-        display = self._format_received_data(session, data)
-        if display and not self.pause_display_var.get():
-            self.receive_text.insert(tk.END, display)
-            self.receive_text.see(tk.END)
-        if display and self.realtime_save_var.get():
-            self._append_realtime_file(display)
+        display = self._format_received_data(data)
+        if not display:
+            return
+        timestamp = self._receive_timestamp() if self.timestamp_var.get() else ""
+        if not self.pause_display_var.get():
+            self._append_receive_record(timestamp, session.name, display)
+        if self.realtime_save_var.get():
+            self._append_realtime_file(self._format_receive_record_for_file(timestamp, session.name, display))
 
     def _append_system_message(self, session: ConnectionSession, text: str) -> None:
-        now = datetime.now().strftime("%H:%M:%S")
-        display = f"[{now}] [{session.name}] {text}\n"
+        timestamp = datetime.now().strftime("%H:%M:%S")
         if not self.pause_display_var.get():
-            self.receive_text.insert(tk.END, display)
-            self.receive_text.see(tk.END)
+            self._append_receive_record(timestamp, session.name, text)
         if self.realtime_save_var.get():
-            self._append_realtime_file(display)
+            self._append_realtime_file(self._format_receive_record_for_file(timestamp, session.name, text))
 
-    def _format_received_data(self, session: ConnectionSession, data: bytes) -> str:
-        prefix_parts = [f"[{session.name}]"]
-        if self.timestamp_var.get():
-            now = datetime.now()
-            prefix_parts.insert(0, f"[{now:%H:%M:%S}.{now.microsecond // 1000:03d}]")
-        prefix = " ".join(prefix_parts) + " "
-
+    def _format_received_data(self, data: bytes) -> str:
         if self.hex_recv_var.get():
-            text = bytes_to_hex(data)
-            return f"{prefix}{text}\n" if text else ""
+            return bytes_to_hex(data)
 
         encoding = self.encoding_var.get() or "utf-8"
-        text = data.decode(encoding, errors="replace")
-        return f"{prefix}{text}"
+        return data.decode(encoding, errors="replace")
+
+    def _receive_timestamp(self) -> str:
+        now = datetime.now()
+        return f"{now:%H:%M:%S}.{now.microsecond // 1000:03d}"
+
+    def _append_receive_record(self, timestamp: str, connection: str, data: str) -> None:
+        data_text = self._receive_data_with_newline(data)
+        row_count = max(1, data_text.count("\n"))
+        time_text = self._metadata_column_text(timestamp, row_count)
+        connection_text = self._metadata_column_text(connection, row_count)
+
+        self._set_receive_widgets_state(tk.NORMAL)
+        self.receive_time_text.insert(tk.END, time_text)
+        self.receive_connection_text.insert(tk.END, connection_text)
+        self.receive_text.insert(tk.END, data_text)
+        self._set_receive_widgets_state(tk.DISABLED)
+        for widget in self.receive_widgets:
+            widget.see(tk.END)
+
+    def _receive_data_with_newline(self, data: str) -> str:
+        return data if data.endswith("\n") else f"{data}\n"
+
+    def _metadata_column_text(self, value: str, row_count: int) -> str:
+        lines = [value] + [""] * (row_count - 1)
+        return "\n".join(lines) + "\n"
+
+    def _set_receive_widgets_state(self, state: str) -> None:
+        for widget in getattr(self, "receive_widgets", ()):
+            widget.configure(state=state)
+
+    def _format_receive_record_for_file(self, timestamp: str, connection: str, data: str) -> str:
+        data_text = self._receive_data_with_newline(data)
+        rows = data_text[:-1].split("\n")
+        lines = []
+        for index, row in enumerate(rows):
+            time_text = timestamp if index == 0 else ""
+            connection_text = connection if index == 0 else ""
+            lines.append(f"{time_text}\t{connection_text}\t{row}")
+        return "\n".join(lines) + "\n"
 
     def send_now(self, silent: bool = False) -> None:
         session = self.active_session
@@ -2118,7 +2219,10 @@ class SerialDebugTool(tk.Tk):
         self.send_text.delete("1.0", tk.END)
 
     def clear_receive(self) -> None:
-        self.receive_text.delete("1.0", tk.END)
+        self._set_receive_widgets_state(tk.NORMAL)
+        for widget in self.receive_widgets:
+            widget.delete("1.0", tk.END)
+        self._set_receive_widgets_state(tk.DISABLED)
 
     def clear_counts(self) -> None:
         session = self.active_session
@@ -2144,10 +2248,24 @@ class SerialDebugTool(tk.Tk):
         if not path:
             return
         try:
-            Path(path).write_text(self.receive_text.get("1.0", "end-1c"), encoding="utf-8")
+            Path(path).write_text(self._receive_log_text(), encoding="utf-8")
             self.status_var.set(f"已保存到 {path}")
         except Exception as exc:
             messagebox.showerror("保存失败", str(exc))
+
+    def _receive_log_text(self) -> str:
+        time_lines = self.receive_time_text.get("1.0", "end-1c").split("\n")
+        connection_lines = self.receive_connection_text.get("1.0", "end-1c").split("\n")
+        data_lines = self.receive_text.get("1.0", "end-1c").split("\n")
+        row_count = max(len(time_lines), len(connection_lines), len(data_lines))
+        lines: list[str] = []
+        for index in range(row_count):
+            time_text = time_lines[index] if index < len(time_lines) else ""
+            connection_text = connection_lines[index] if index < len(connection_lines) else ""
+            data_text = data_lines[index] if index < len(data_lines) else ""
+            if time_text or connection_text or data_text:
+                lines.append(f"{time_text}\t{connection_text}\t{data_text}".rstrip())
+        return "\n".join(lines)
 
     def _update_counts(self) -> None:
         session = self.active_session
