@@ -502,6 +502,27 @@ class SerialDebugQtTool(QMainWindow):
             padding-left: 7px;
             padding-right: 7px;
         }}
+        QPushButton#TabCloseButton {{
+            background: #FF5F57;
+            color: #5C1613;
+            border: 0;
+            border-radius: 7px;
+            padding: 0;
+            min-width: 14px;
+            max-width: 14px;
+            min-height: 14px;
+            max-height: 14px;
+            font-size: 11px;
+            font-weight: 700;
+        }}
+        QPushButton#TabCloseButton:hover {{
+            background: #FF6B64;
+            color: #2F0B09;
+        }}
+        QPushButton#TabCloseButton:pressed {{
+            background: #E0443E;
+            color: #2F0B09;
+        }}
         QCheckBox {{
             spacing: 6px;
             color: {THEME["text"]};
@@ -824,11 +845,10 @@ class SerialDebugQtTool(QMainWindow):
 
         self.session_tabs = QTabBar()
         self.session_tabs.setDocumentMode(True)
-        self.session_tabs.setTabsClosable(True)
+        self.session_tabs.setTabsClosable(False)
         self.session_tabs.setExpanding(False)
         self.session_tabs.setUsesScrollButtons(True)
         self.session_tabs.currentChanged.connect(self._on_session_tab_changed)
-        self.session_tabs.tabCloseRequested.connect(self._close_session_tab)
         layout.addWidget(self.session_tabs)
 
         session = QWidget()
@@ -1327,6 +1347,7 @@ class SerialDebugQtTool(QMainWindow):
                 index = self.session_tabs.addTab(session.name)
                 self.session_tabs.setTabData(index, session.id)
                 self.session_tabs.setTabToolTip(index, session.name)
+                self.session_tabs.setTabButton(index, QTabBar.ButtonPosition.RightSide, self._make_tab_close_button(session.id))
                 if session.id == self.active_session_id:
                     active_index = index
             self.session_tabs.setVisible(bool(visible_sessions))
@@ -1358,6 +1379,10 @@ class SerialDebugQtTool(QMainWindow):
 
     def _close_session_tab(self, index: int) -> None:
         session_id = self.session_tabs.tabData(index)
+        if session_id is not None:
+            self._close_session_tab_by_id(int(session_id))
+
+    def _close_session_tab_by_id(self, session_id: int) -> None:
         session = self.sessions.get(int(session_id)) if session_id is not None else None
         if session is not None:
             if session.is_connected:
@@ -1373,6 +1398,15 @@ class SerialDebugQtTool(QMainWindow):
                     self._select_session(session)
             self._set_status(f"已断开：{session.name}")
             self._schedule_config_save()
+
+    def _make_tab_close_button(self, session_id: int) -> QPushButton:
+        button = QPushButton("×")
+        button.setObjectName("TabCloseButton")
+        button.setFixedSize(14, 14)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setToolTip("关闭标签")
+        button.clicked.connect(lambda _checked=False, item_id=session_id: self._close_session_tab_by_id(item_id))
+        return button
 
     def _first_tab_session(self) -> ConnectionSession | None:
         return next((session for session in sorted(self.sessions.values(), key=lambda item: item.id) if session.tab_open), None)
