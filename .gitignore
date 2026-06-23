@@ -15,4 +15,3 @@ Serial-port-debugging-tools.zip
 
 dist/*
 !dist/
-!dist/*.exe
