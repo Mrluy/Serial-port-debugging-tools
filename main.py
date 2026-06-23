@@ -26,14 +26,37 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 CONFIG_DIR_NAME = "Serial-port-debugging-tools"
 CONFIG_FILE_NAME = "config.json"
 CONFIG_SCHEMA_VERSION = 1
-DEFAULT_GEOMETRY = "1180x760"
-DEFAULT_LEFT_PANEL_WIDTH = 285
+DEFAULT_GEOMETRY = "1180x800"
+DEFAULT_LEFT_PANEL_WIDTH = 320
+UI_FONT_FAMILY = "Microsoft YaHei UI"
+MONO_FONT_FAMILY = "Consolas"
+THEME = {
+    "bg": "#0B1220",
+    "bg_alt": "#0E1726",
+    "card": "#101827",
+    "card_alt": "#121C2C",
+    "input": "#0D1625",
+    "input_alt": "#111B2C",
+    "border": "#26344A",
+    "border_soft": "#1C293B",
+    "text": "#E6EDF7",
+    "muted": "#9AA8BC",
+    "disabled": "#5F6B7A",
+    "accent": "#2F6BFF",
+    "accent_hover": "#3D78FF",
+    "accent_pressed": "#2459D6",
+    "accent_soft": "#173B88",
+    "success": "#22C55E",
+    "warning": "#F59E0B",
+    "error": "#EF4444",
+    "status_disconnected": "#64748B",
+}
 MODE_SERIAL = "COM串口"
 MODE_TCP_CLIENT = "TCP客户端"
 MODE_TCP_SERVER = "TCP服务端"
@@ -177,13 +200,16 @@ class ConnectionSession:
 
 class ConnectionTree(tk.Canvas):
     def __init__(self, parent: tk.Widget, height: int = 12) -> None:
-        self.row_height = 20
+        self.row_height = 28
         super().__init__(
             parent,
-            bg="white",
+            bg=THEME["card"],
             height=height * self.row_height,
             highlightthickness=1,
-            highlightbackground="#C8C8C8",
+            highlightbackground=THEME["border"],
+            highlightcolor=THEME["accent"],
+            bd=0,
+            relief=tk.FLAT,
         )
         self._items: dict[str, dict[str, object]] = {}
         self._children: dict[str, list[str]] = {"": []}
@@ -192,6 +218,8 @@ class ConnectionTree(tk.Canvas):
         self._focus: str | None = None
         self._next_id = 1
         self._font = font.nametofont("TkDefaultFont")
+        self._group_font = self._font.copy()
+        self._group_font.configure(weight="bold")
         self.bind("<Button-1>", self._on_click)
 
     def insert(
@@ -271,6 +299,11 @@ class ConnectionTree(tk.Canvas):
     def _on_click(self, event: tk.Event) -> None:
         item_id = self.identify_row(event.y)
         if item_id:
+            item = self._items[item_id]
+            is_root = item["parent"] == ""
+            if is_root and int(event.x) <= 30:
+                item["open"] = not bool(item.get("open", True))
+                self._redraw()
             self.selection_set(item_id)
 
     def _redraw(self) -> None:
@@ -285,7 +318,7 @@ class ConnectionTree(tk.Canvas):
             indent = 4 + depth * 20
 
             if is_root:
-                self._draw_expand_box(indent, y)
+                self._draw_expand_box(indent, y, bool(item.get("open", True)))
                 icon_x = indent + 16
             else:
                 icon_x = indent + 18
@@ -297,20 +330,21 @@ class ConnectionTree(tk.Canvas):
             text = str(item.get("text", ""))
             text_x = icon_x + 18
             text_y = y + self.row_height // 2
+            item_font = self._group_font if is_root else self._font
             if item_id == self._selection:
-                width = self._font.measure(text)
+                width = item_font.measure(text)
                 self.create_rectangle(
-                    text_x - 2,
-                    y + 2,
-                    text_x + width + 3,
-                    y + self.row_height - 2,
-                    fill="#0078D7",
-                    outline="#0078D7",
+                    text_x - 6,
+                    y + 4,
+                    text_x + width + 8,
+                    y + self.row_height - 4,
+                    fill=THEME["accent"],
+                    outline=THEME["accent"],
                 )
-                fill = "white"
+                fill = "#FFFFFF"
             else:
-                fill = "black"
-            self.create_text(text_x, text_y, text=text, anchor="w", fill=fill, font=self._font)
+                fill = THEME["text"] if is_root else THEME["text"]
+            self.create_text(text_x, text_y, text=text, anchor="w", fill=fill, font=item_font)
 
         total_height = max(len(self._visible_items) * self.row_height, int(self["height"]))
         self.configure(scrollregion=(0, 0, 1, total_height))
@@ -321,10 +355,12 @@ class ConnectionTree(tk.Canvas):
             if self._items[item_id].get("open", True):
                 self._collect_visible(item_id, depth + 1)
 
-    def _draw_expand_box(self, x: int, y: int) -> None:
-        top = y + 6
-        self.create_rectangle(x, top, x + 8, top + 8, fill="white", outline="#7A7A7A")
-        self.create_line(x + 2, top + 4, x + 6, top + 4, fill="#333333")
+    def _draw_expand_box(self, x: int, y: int, is_open: bool) -> None:
+        top = y + 9
+        self.create_rectangle(x, top, x + 9, top + 9, fill=THEME["input"], outline=THEME["border"])
+        self.create_line(x + 2, top + 4, x + 7, top + 4, fill=THEME["muted"])
+        if not is_open:
+            self.create_line(x + 4, top + 2, x + 4, top + 7, fill=THEME["muted"])
 
 
 class SerialDebugTool(tk.Tk):
@@ -333,7 +369,8 @@ class SerialDebugTool(tk.Tk):
         self.title(APP_TITLE)
         self._set_window_icon()
         self.geometry(DEFAULT_GEOMETRY)
-        self.minsize(980, 620)
+        self.minsize(1180, 720)
+        self.configure(background=THEME["bg"])
 
         self.sessions: dict[int, ConnectionSession] = {}
         self.mode_root_ids: dict[str, str] = {}
@@ -382,20 +419,23 @@ class SerialDebugTool(tk.Tk):
         self.realtime_path_var = tk.StringVar()
 
         self.status_var = tk.StringVar(value="就绪")
+        self.connection_state_var = tk.StringVar(value="已断开")
+        self.connection_address_var = tk.StringVar(value=MODE_SERIAL)
         self.count_var = tk.StringVar(value="发送: 0 字节    接收: 0 字节")
         self.speed_var = tk.StringVar(value="发送速度(B/S): 0    接收速度(B/S): 0")
         self.status_images = self._create_status_images()
 
         self._build_style()
         self._build_menu()
-        self._build_body()
         self._build_status_bar()
+        self._build_body()
 
         self.refresh_ports()
         self._load_config_on_start()
         self._bind_config_traces()
         self._loading_config = False
         self._set_connected_state(False)
+        self.after(0, self._enable_windows_dark_title_bar)
         self.after(60, self._drain_rx_queue)
         self.after(1000, self._update_speed)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -410,14 +450,227 @@ class SerialDebugTool(tk.Tk):
         except tk.TclError:
             pass
 
+    def _enable_windows_dark_title_bar(self) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            value = ctypes.c_int(1)
+            hwnd = self.winfo_id()
+            for attribute in (20, 19):
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+                if result == 0:
+                    break
+        except Exception:
+            pass
+
     def _build_style(self) -> None:
         style = ttk.Style(self)
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
-        style.configure("Toolbar.TFrame", background="#f2f2f2")
-        style.configure("Status.TLabel", padding=(8, 2))
-        style.configure("Pane.TLabelframe", padding=6)
-        style.configure("Small.TButton", padding=(8, 2))
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+
+        try:
+            font.nametofont("TkDefaultFont").configure(family=UI_FONT_FAMILY, size=10)
+            font.nametofont("TkTextFont").configure(family=UI_FONT_FAMILY, size=10)
+            font.nametofont("TkMenuFont").configure(family=UI_FONT_FAMILY, size=10)
+            font.nametofont("TkFixedFont").configure(family=MONO_FONT_FAMILY, size=10)
+        except tk.TclError:
+            pass
+
+        self.option_add("*Font", f"{{{UI_FONT_FAMILY}}} 10")
+        self.option_add("*Menu.background", THEME["bg_alt"])
+        self.option_add("*Menu.foreground", THEME["text"])
+        self.option_add("*Menu.activeBackground", THEME["accent"])
+        self.option_add("*Menu.activeForeground", "#FFFFFF")
+        self.option_add("*Menu.disabledForeground", THEME["disabled"])
+        self.option_add("*TCombobox*Listbox.background", THEME["input"])
+        self.option_add("*TCombobox*Listbox.foreground", THEME["text"])
+        self.option_add("*TCombobox*Listbox.selectBackground", THEME["accent"])
+        self.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+
+        style.configure(
+            ".",
+            background=THEME["bg"],
+            foreground=THEME["text"],
+            bordercolor=THEME["border"],
+            darkcolor=THEME["border"],
+            lightcolor=THEME["border_soft"],
+            troughcolor=THEME["input"],
+            fieldbackground=THEME["input"],
+            selectbackground=THEME["accent"],
+            selectforeground="#FFFFFF",
+            focuscolor=THEME["accent"],
+        )
+        style.configure("TFrame", background=THEME["bg"])
+        style.configure("Root.TFrame", background=THEME["bg"])
+        style.configure("Card.TFrame", background=THEME["card"], borderwidth=1, relief=tk.SOLID)
+        style.configure("Toolbar.TFrame", background=THEME["card"])
+        style.configure("TLabel", background=THEME["card"], foreground=THEME["text"], padding=0)
+        style.configure("Card.TLabel", background=THEME["card"], foreground=THEME["text"])
+        style.configure("Muted.TLabel", background=THEME["card"], foreground=THEME["muted"])
+        style.configure(
+            "Section.TLabel",
+            background=THEME["card"],
+            foreground=THEME["text"],
+            font=(UI_FONT_FAMILY, 11, "bold"),
+        )
+        style.configure("Header.TLabel", background=THEME["input"], foreground=THEME["text"], padding=(10, 8))
+        style.configure("Empty.TLabel", background=THEME["input"], foreground=THEME["disabled"])
+        style.configure("Status.TFrame", background=THEME["bg_alt"], borderwidth=1, relief=tk.SOLID)
+        style.configure("Status.TLabel", background=THEME["bg_alt"], foreground=THEME["muted"], padding=(8, 6))
+        style.configure(
+            "StatusStrong.TLabel",
+            background=THEME["bg_alt"],
+            foreground=THEME["text"],
+            padding=(8, 6),
+        )
+        style.configure("Pane.TLabelframe", background=THEME["card"], borderwidth=1, relief=tk.SOLID, padding=8)
+        style.configure(
+            "Pane.TLabelframe.Label",
+            background=THEME["card"],
+            foreground=THEME["text"],
+            font=(UI_FONT_FAMILY, 10, "bold"),
+        )
+        style.configure(
+            "TButton",
+            background=THEME["card_alt"],
+            foreground=THEME["text"],
+            bordercolor=THEME["border"],
+            focusthickness=1,
+            focuscolor=THEME["accent"],
+            padding=(10, 6),
+            relief=tk.FLAT,
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("disabled", THEME["input_alt"]),
+                ("pressed", THEME["accent_pressed"]),
+                ("active", THEME["accent_hover"]),
+            ],
+            foreground=[("disabled", THEME["disabled"])],
+            bordercolor=[("focus", THEME["accent"]), ("active", THEME["accent_hover"])],
+        )
+        style.configure("Primary.TButton", background=THEME["accent"], foreground="#FFFFFF", bordercolor=THEME["accent"])
+        style.map(
+            "Primary.TButton",
+            background=[
+                ("disabled", THEME["input_alt"]),
+                ("pressed", THEME["accent_pressed"]),
+                ("active", THEME["accent_hover"]),
+            ],
+            foreground=[("disabled", THEME["disabled"]), ("active", "#FFFFFF")],
+        )
+        style.configure("Secondary.TButton", background=THEME["card_alt"], foreground=THEME["text"])
+        style.configure("Small.TButton", padding=(8, 4), background=THEME["card_alt"], foreground=THEME["text"])
+        style.configure(
+            "TEntry",
+            fieldbackground=THEME["input"],
+            foreground=THEME["text"],
+            insertcolor=THEME["text"],
+            bordercolor=THEME["border"],
+            lightcolor=THEME["border"],
+            darkcolor=THEME["border"],
+            padding=(8, 5),
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("disabled", THEME["input_alt"]), ("readonly", THEME["input"])],
+            foreground=[("disabled", THEME["disabled"])],
+            bordercolor=[("focus", THEME["accent"]), ("active", THEME["accent_hover"])],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=THEME["input"],
+            background=THEME["input"],
+            foreground=THEME["text"],
+            arrowcolor=THEME["muted"],
+            bordercolor=THEME["border"],
+            lightcolor=THEME["border"],
+            darkcolor=THEME["border"],
+            padding=(8, 4),
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", THEME["input"]), ("disabled", THEME["input_alt"])],
+            foreground=[("disabled", THEME["disabled"])],
+            bordercolor=[("focus", THEME["accent"]), ("active", THEME["accent_hover"])],
+            arrowcolor=[("disabled", THEME["disabled"]), ("active", THEME["text"])],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=THEME["card"],
+            foreground=THEME["text"],
+            padding=(4, 2),
+            indicatorsize=13,
+            indicatorbackground=THEME["input"],
+            indicatorforeground="#FFFFFF",
+            upperbordercolor=THEME["border"],
+            lowerbordercolor=THEME["border"],
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", THEME["card"]), ("disabled", THEME["card"])],
+            foreground=[("disabled", THEME["disabled"]), ("active", THEME["text"])],
+            indicatorbackground=[
+                ("selected", THEME["accent"]),
+                ("disabled", THEME["input_alt"]),
+                ("!selected", THEME["input"]),
+            ],
+            indicatorforeground=[("selected", "#FFFFFF"), ("disabled", THEME["disabled"])],
+        )
+        style.configure("TNotebook", background=THEME["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TPanedwindow", background=THEME["bg"])
+        style.configure("Sash", background=THEME["border_soft"])
+        style.configure("TSeparator", background=THEME["border_soft"])
+        style.configure(
+            "TNotebook.Tab",
+            background=THEME["card_alt"],
+            foreground=THEME["muted"],
+            bordercolor=THEME["border"],
+            padding=(18, 8),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", THEME["accent_soft"]), ("active", THEME["card"])],
+            foreground=[("selected", THEME["text"]), ("active", THEME["text"])],
+        )
+        for orient in ("Vertical", "Horizontal"):
+            style.configure(
+                f"{orient}.TScrollbar",
+                background=THEME["border"],
+                bordercolor=THEME["input"],
+                arrowcolor=THEME["muted"],
+                troughcolor=THEME["input"],
+                lightcolor=THEME["border"],
+                darkcolor=THEME["border"],
+                relief=tk.FLAT,
+                width=12,
+            )
+            style.map(
+                f"{orient}.TScrollbar",
+                background=[("active", THEME["accent_hover"]), ("pressed", THEME["accent_pressed"])],
+                arrowcolor=[("disabled", THEME["disabled"]), ("active", THEME["text"])],
+            )
+
+    def _create_menu(self, parent: tk.Misc) -> tk.Menu:
+        return tk.Menu(
+            parent,
+            tearoff=False,
+            bg=THEME["bg_alt"],
+            fg=THEME["text"],
+            activebackground=THEME["accent"],
+            activeforeground="#FFFFFF",
+            disabledforeground=THEME["disabled"],
+            relief=tk.FLAT,
+            borderwidth=0,
+        )
 
     def _create_status_images(self) -> dict[str, tk.PhotoImage]:
         def make_dot(color: str) -> tk.PhotoImage:
@@ -431,21 +684,21 @@ class SerialDebugTool(tk.Tk):
             return image
 
         images = {
-            "disconnected": make_dot("#2F80ED"),
-            "connected": make_dot("#27AE60"),
+            "disconnected": make_dot(THEME["status_disconnected"]),
+            "connected": make_dot(THEME["success"]),
         }
         images["mode"] = tk.PhotoImage(width=12, height=12)
         for x in range(2, 10):
             for y in range(3, 9):
-                images["mode"].put("#707070", (x, y))
+                images["mode"].put(THEME["muted"], (x, y))
         for x in range(4, 8):
-            images["mode"].put("#4A4A4A", (x, 10))
+            images["mode"].put(THEME["disabled"], (x, 10))
         return images
 
     def _build_menu(self) -> None:
-        menu_bar = tk.Menu(self)
+        menu_bar = self._create_menu(self)
 
-        action_menu = tk.Menu(menu_bar, tearoff=False)
+        action_menu = self._create_menu(menu_bar)
         action_menu.add_command(label="刷新连接列表", command=self.refresh_ports)
         action_menu.add_command(label="创建连接", command=self.create_connection)
         action_menu.add_command(label="删除连接", command=self.delete_current_connection)
@@ -455,24 +708,24 @@ class SerialDebugTool(tk.Tk):
         action_menu.add_command(label="退出", command=self.on_close)
         menu_bar.add_cascade(label="操作(O)", menu=action_menu)
 
-        view_menu = tk.Menu(menu_bar, tearoff=False)
+        view_menu = self._create_menu(menu_bar)
         view_menu.add_command(label="清空发送区", command=self.clear_send)
         view_menu.add_command(label="清空接收区", command=self.clear_receive)
         view_menu.add_command(label="清空计数", command=self.clear_counts)
         menu_bar.add_cascade(label="查看(V)", menu=view_menu)
 
-        config_menu = tk.Menu(menu_bar, tearoff=False)
+        config_menu = self._create_menu(menu_bar)
         config_menu.add_command(label="导入配置", command=self.import_config)
         config_menu.add_command(label="导出配置", command=self.export_config)
         config_menu.add_separator()
         config_menu.add_command(label="清除配置", command=self.clear_config)
         menu_bar.add_cascade(label="配置(C)", menu=config_menu)
 
-        window_menu = tk.Menu(menu_bar, tearoff=False)
+        window_menu = self._create_menu(menu_bar)
         window_menu.add_command(label="恢复默认大小", command=lambda: self.geometry(DEFAULT_GEOMETRY))
         menu_bar.add_cascade(label="窗口(W)", menu=window_menu)
 
-        help_menu = tk.Menu(menu_bar, tearoff=False)
+        help_menu = self._create_menu(menu_bar)
         help_menu.add_command(label="关于", command=self.show_about)
         menu_bar.add_cascade(label="帮助(H)", menu=help_menu)
 
@@ -482,9 +735,9 @@ class SerialDebugTool(tk.Tk):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(paned, width=DEFAULT_LEFT_PANEL_WIDTH, padding=(4, 4))
+        left = ttk.Frame(paned, width=DEFAULT_LEFT_PANEL_WIDTH, padding=(10, 10), style="Root.TFrame")
         left.pack_propagate(False)
-        right = ttk.Frame(paned, padding=(4, 4))
+        right = ttk.Frame(paned, padding=(8, 10, 10, 10), style="Root.TFrame")
         paned.add(left, weight=0)
         paned.add(right, weight=1)
 
@@ -493,9 +746,9 @@ class SerialDebugTool(tk.Tk):
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
         self.port_box = ttk.LabelFrame(parent, text="连接列表", style="Pane.TLabelframe")
-        self.port_box.pack(fill=tk.BOTH, expand=False)
+        self.port_box.pack(fill=tk.BOTH, expand=True)
 
-        self.port_tree = ConnectionTree(self.port_box, height=12)
+        self.port_tree = ConnectionTree(self.port_box, height=8)
         self.port_tree.pack(fill=tk.BOTH, expand=True)
         self.port_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.port_tree.bind("<Button-3>", self._show_connection_context_menu)
@@ -543,7 +796,7 @@ class SerialDebugTool(tk.Tk):
             ttk.Combobox(config_box, textvariable=self.encoding_var, values=ENCODINGS, width=12),
         )
 
-        line_box = ttk.Frame(config_box)
+        line_box = ttk.Frame(config_box, style="Card.TFrame")
         line_box.grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(4, 0))
         ttk.Checkbutton(line_box, text="DTR", variable=self.dtr_var, command=self._apply_line_state).pack(
             side=tk.LEFT
@@ -554,16 +807,29 @@ class SerialDebugTool(tk.Tk):
 
         self.network_config_box = self._build_network_config(parent)
 
-        self.connection_button_bar = ttk.Frame(parent)
+        self.connection_button_bar = ttk.Frame(parent, style="Root.TFrame")
         self.connection_button_bar.pack(fill=tk.X, pady=(8, 0))
-        self.create_btn = ttk.Button(self.connection_button_bar, text="创建连接", command=self.create_connection)
-        self.connect_btn = ttk.Button(self.connection_button_bar, text="打开连接", command=self.toggle_connection)
+        self.create_btn = ttk.Button(
+            self.connection_button_bar,
+            text="创建连接",
+            command=self.create_connection,
+            style="Primary.TButton",
+        )
+        self.connect_btn = ttk.Button(
+            self.connection_button_bar,
+            text="打开连接",
+            command=self.toggle_connection,
+            style="Secondary.TButton",
+        )
         self._update_connection_buttons()
 
         count_box = ttk.LabelFrame(parent, text="计数", style="Pane.TLabelframe")
         count_box.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(count_box, textvariable=self.count_var, justify=tk.LEFT).pack(anchor=tk.W)
-        ttk.Button(count_box, text="清空计数", command=self.clear_counts).pack(anchor=tk.W, pady=(6, 0))
+        ttk.Label(count_box, textvariable=self.count_var, justify=tk.LEFT, style="Muted.TLabel").pack(anchor=tk.W)
+        ttk.Button(count_box, text="清空计数", command=self.clear_counts, style="Secondary.TButton").pack(
+            anchor=tk.W,
+            pady=(8, 0),
+        )
 
         self._update_mode_controls()
 
@@ -584,22 +850,26 @@ class SerialDebugTool(tk.Tk):
         return network_box
 
     def _network_row(self, parent: ttk.Frame, key: str, row: int, label: str, widget: tk.Widget) -> None:
-        label_widget = ttk.Label(parent, text=label)
-        label_widget.grid(row=row, column=0, sticky=tk.W, pady=2)
-        widget.grid(row=row, column=1, sticky=tk.EW, pady=2)
+        label_widget = ttk.Label(parent, text=label, style="Card.TLabel")
+        label_widget.grid(row=row, column=0, sticky=tk.W, pady=3, padx=(0, 8))
+        widget.grid(row=row, column=1, sticky=tk.EW, pady=3)
         self.network_rows[key] = (label_widget, widget)
 
     def _make_port_selector(self, parent: ttk.Frame) -> ttk.Frame:
-        frame = ttk.Frame(parent)
+        frame = ttk.Frame(parent, style="Card.TFrame")
         frame.columnconfigure(0, weight=1)
         self.port_combo = ttk.Combobox(frame, textvariable=self.port_var, width=12)
         self.port_combo.grid(row=0, column=0, sticky=tk.EW)
-        ttk.Button(frame, text="刷新", width=5, command=self.refresh_ports).grid(row=0, column=1, padx=(4, 0))
+        ttk.Button(frame, text="刷新", width=5, command=self.refresh_ports, style="Small.TButton").grid(
+            row=0,
+            column=1,
+            padx=(6, 0),
+        )
         return frame
 
     def _labeled_widget(self, parent: ttk.Frame, row: int, label: str, widget: tk.Widget) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=2)
-        widget.grid(row=row, column=1, sticky=tk.EW, pady=2)
+        ttk.Label(parent, text=label, style="Card.TLabel").grid(row=row, column=0, sticky=tk.W, pady=3, padx=(0, 8))
+        widget.grid(row=row, column=1, sticky=tk.EW, pady=3)
 
     def _on_mode_change(self, _event: tk.Event | None = None) -> None:
         if _event is not None:
@@ -610,6 +880,7 @@ class SerialDebugTool(tk.Tk):
         self._update_mode_controls()
         self._set_connected_state(self.is_connected)
         self.status_var.set(f"当前模式：{self.mode_var.get()}")
+        self._refresh_status_summary()
 
     def _apply_mode_defaults(self) -> None:
         mode = self.mode_var.get()
@@ -656,14 +927,14 @@ class SerialDebugTool(tk.Tk):
             widget.grid_remove()
         for row, key in enumerate(visible_rows):
             label, widget = self.network_rows[key]
-            label.grid(row=row, column=0, sticky=tk.W, pady=2)
-            widget.grid(row=row, column=1, sticky=tk.EW, pady=2)
+            label.grid(row=row, column=0, sticky=tk.W, pady=3, padx=(0, 8))
+            widget.grid(row=row, column=1, sticky=tk.EW, pady=3)
 
     def _build_workspace(self, parent: ttk.Frame) -> None:
         self.notebook = ttk.Notebook(parent)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        session = ttk.Frame(self.notebook, padding=6)
+        session = ttk.Frame(self.notebook, padding=(8, 10), style="Root.TFrame")
         self.notebook.add(session, text="串口会话")
         session.rowconfigure(2, weight=1)
         session.rowconfigure(6, weight=1)
@@ -673,12 +944,37 @@ class SerialDebugTool(tk.Tk):
         ttk.Separator(session, orient=tk.HORIZONTAL).grid(row=3, column=0, sticky=tk.EW, pady=(6, 6))
         self._build_receive_area(session)
 
-    def _build_send_area(self, parent: ttk.Frame) -> None:
-        send_toolbar = ttk.Frame(parent)
-        send_toolbar.grid(row=0, column=0, sticky=tk.EW)
-        send_toolbar.columnconfigure(14, weight=1)
+    def _configure_text_widget(self, widget: tk.Text, *, mono: bool = False) -> None:
+        family = MONO_FONT_FAMILY if mono else UI_FONT_FAMILY
+        widget.configure(
+            bg=THEME["input"],
+            fg=THEME["text"],
+            insertbackground=THEME["text"],
+            selectbackground=THEME["accent"],
+            selectforeground="#FFFFFF",
+            inactiveselectbackground=THEME["accent_soft"],
+            relief=tk.SOLID,
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=THEME["border"],
+            highlightcolor=THEME["accent"],
+            padx=10,
+            pady=8,
+            font=(family, 10),
+        )
 
-        ttk.Label(send_toolbar, text="发送区").grid(row=0, column=0, padx=(0, 8))
+    def _show_empty_state(self, label: ttk.Label, target: tk.Text) -> None:
+        label.place(in_=target, relx=0.5, rely=0.5, anchor=tk.CENTER)
+
+    def _hide_empty_state(self, label: ttk.Label) -> None:
+        label.place_forget()
+
+    def _build_send_area(self, parent: ttk.Frame) -> None:
+        send_toolbar = ttk.Frame(parent, style="Toolbar.TFrame", padding=(12, 10, 12, 6))
+        send_toolbar.grid(row=0, column=0, sticky=tk.EW)
+        send_toolbar.columnconfigure(6, weight=1)
+
+        ttk.Label(send_toolbar, text="发送区", style="Section.TLabel").grid(row=0, column=0, padx=(0, 12))
         ttk.Checkbutton(send_toolbar, text="16进制", variable=self.hex_send_var).grid(row=0, column=1, padx=2)
         ttk.Checkbutton(send_toolbar, text="追加CRLF", variable=self.send_newline_var).grid(
             row=0, column=2, padx=2
@@ -702,44 +998,67 @@ class SerialDebugTool(tk.Tk):
             text="发送文件",
             variable=self.send_file_var,
             command=self._toggle_file_send_controls,
-        ).grid(row=0, column=5, padx=2)
+        ).grid(row=1, column=1, padx=2, pady=(6, 0), sticky=tk.W)
         ttk.Checkbutton(
             send_toolbar,
             text="自动发送",
             variable=self.auto_send_var,
             command=self._on_auto_send_toggle,
-        ).grid(row=0, column=6, padx=2)
-        ttk.Label(send_toolbar, text="间隔").grid(row=0, column=7, padx=(8, 2))
-        ttk.Entry(send_toolbar, textvariable=self.interval_var, width=7).grid(row=0, column=8)
-        ttk.Label(send_toolbar, text="ms").grid(row=0, column=9, padx=(2, 8))
-        ttk.Button(send_toolbar, text="发送", command=self.send_now, width=8).grid(row=0, column=10, padx=2)
-        ttk.Button(send_toolbar, text="停止", command=self.stop_auto_send, width=8).grid(row=0, column=11, padx=2)
-        ttk.Button(send_toolbar, text="清空", command=self.clear_send, width=8).grid(row=0, column=12, padx=2)
+        ).grid(row=1, column=2, padx=2, pady=(6, 0), sticky=tk.W)
+        ttk.Label(send_toolbar, text="间隔").grid(row=1, column=3, padx=(8, 2), pady=(6, 0))
+        ttk.Entry(send_toolbar, textvariable=self.interval_var, width=7).grid(row=1, column=4, pady=(6, 0))
+        ttk.Label(send_toolbar, text="ms").grid(row=1, column=5, padx=(2, 8), pady=(6, 0))
+        ttk.Button(send_toolbar, text="发送", command=self.send_now, width=8, style="Primary.TButton").grid(
+            row=1,
+            column=7,
+            padx=2,
+            pady=(6, 0),
+            sticky=tk.E,
+        )
+        ttk.Button(send_toolbar, text="停止", command=self.stop_auto_send, width=8, style="Secondary.TButton").grid(
+            row=1,
+            column=8,
+            padx=2,
+            pady=(6, 0),
+            sticky=tk.E,
+        )
+        ttk.Button(send_toolbar, text="清空", command=self.clear_send, width=8, style="Secondary.TButton").grid(
+            row=1,
+            column=9,
+            padx=2,
+            pady=(6, 0),
+            sticky=tk.E,
+        )
 
-        file_bar = ttk.Frame(parent)
-        file_bar.grid(row=1, column=0, sticky=tk.EW, pady=(5, 4))
+        file_bar = ttk.Frame(parent, style="Toolbar.TFrame", padding=(12, 4, 12, 8))
+        file_bar.grid(row=1, column=0, sticky=tk.EW)
         file_bar.columnconfigure(1, weight=1)
         ttk.Label(file_bar, text="文件:").grid(row=0, column=0, sticky=tk.W)
         self.send_file_entry = ttk.Entry(file_bar, textvariable=self.send_file_path_var)
-        self.send_file_entry.grid(row=0, column=1, sticky=tk.EW, padx=(4, 4))
-        self.send_file_btn = ttk.Button(file_bar, text="...", width=4, command=self.choose_send_file)
+        self.send_file_entry.grid(row=0, column=1, sticky=tk.EW, padx=(8, 6))
+        self.send_file_btn = ttk.Button(file_bar, text="...", width=4, command=self.choose_send_file, style="Small.TButton")
         self.send_file_btn.grid(row=0, column=2)
 
-        send_frame = ttk.Frame(parent)
+        send_frame = ttk.Frame(parent, style="Card.TFrame", padding=(12, 8, 12, 12))
         send_frame.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
         send_frame.rowconfigure(1, weight=1)
         send_frame.columnconfigure(2, weight=1)
 
-        ttk.Label(send_frame, text="时间", anchor=tk.W).grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
-        ttk.Label(send_frame, text="连接", anchor=tk.W).grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
-        ttk.Label(send_frame, text="数据", anchor=tk.W).grid(row=0, column=2, sticky=tk.EW)
+        ttk.Label(send_frame, text="时间", anchor=tk.W, style="Header.TLabel").grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(send_frame, text="连接", anchor=tk.W, style="Header.TLabel").grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(send_frame, text="数据", anchor=tk.W, style="Header.TLabel").grid(row=0, column=2, sticky=tk.EW)
 
         self.send_time_text = tk.Text(send_frame, width=14, wrap=tk.NONE)
         self.send_connection_text = tk.Text(send_frame, width=20, wrap=tk.NONE)
         self.send_history_text = tk.Text(send_frame, wrap=tk.NONE)
+        self._configure_text_widget(self.send_time_text, mono=True)
+        self._configure_text_widget(self.send_connection_text)
+        self._configure_text_widget(self.send_history_text, mono=True)
         self.send_time_text.grid(row=1, column=0, sticky=tk.NSEW, padx=(0, 4))
         self.send_connection_text.grid(row=1, column=1, sticky=tk.NSEW, padx=(0, 4))
         self.send_history_text.grid(row=1, column=2, sticky=tk.NSEW)
+        self.send_empty_label = ttk.Label(send_frame, text="暂无数据", style="Empty.TLabel")
+        self._show_empty_state(self.send_empty_label, self.send_history_text)
 
         send_y_scroll = ttk.Scrollbar(send_frame, orient=tk.VERTICAL, command=self._send_yview)
         send_y_scroll.grid(row=1, column=3, sticky=tk.NS)
@@ -751,7 +1070,10 @@ class SerialDebugTool(tk.Tk):
             row=3, column=0, columnspan=4, sticky=tk.EW, pady=(6, 2)
         )
         self.send_text = tk.Text(send_frame, height=4, wrap=tk.CHAR, undo=True)
+        self._configure_text_widget(self.send_text)
         self.send_text.grid(row=4, column=0, columnspan=4, sticky=tk.EW)
+        self._send_placeholder_visible = False
+        self._install_send_placeholder()
         self.send_history_widgets = (self.send_time_text, self.send_connection_text, self.send_history_text)
         for widget in self.send_history_widgets:
             widget.configure(state=tk.DISABLED)
@@ -765,20 +1087,28 @@ class SerialDebugTool(tk.Tk):
         self._toggle_crc_controls()
 
     def _build_receive_area(self, parent: ttk.Frame) -> None:
-        receive_toolbar = ttk.Frame(parent)
+        receive_toolbar = ttk.Frame(parent, style="Toolbar.TFrame", padding=(12, 10, 12, 6))
         receive_toolbar.grid(row=4, column=0, sticky=tk.EW)
         receive_toolbar.columnconfigure(9, weight=1)
 
-        ttk.Label(receive_toolbar, text="接收区").grid(row=0, column=0, padx=(0, 8))
+        ttk.Label(receive_toolbar, text="接收区", style="Section.TLabel").grid(row=0, column=0, padx=(0, 12))
         ttk.Checkbutton(receive_toolbar, text="暂停显示", variable=self.pause_display_var).grid(
             row=0, column=1, padx=2
         )
-        ttk.Button(receive_toolbar, text="清空", command=self.clear_receive, width=8).grid(row=0, column=2, padx=2)
-        ttk.Button(receive_toolbar, text="保存", command=self.save_receive, width=8).grid(row=0, column=3, padx=2)
+        ttk.Button(receive_toolbar, text="清空", command=self.clear_receive, width=8, style="Secondary.TButton").grid(
+            row=0,
+            column=2,
+            padx=2,
+        )
+        ttk.Button(receive_toolbar, text="保存", command=self.save_receive, width=8, style="Secondary.TButton").grid(
+            row=0,
+            column=3,
+            padx=2,
+        )
         ttk.Checkbutton(receive_toolbar, text="16进制", variable=self.hex_recv_var).grid(row=0, column=4, padx=2)
 
-        save_bar = ttk.Frame(parent)
-        save_bar.grid(row=5, column=0, sticky=tk.EW, pady=(5, 4))
+        save_bar = ttk.Frame(parent, style="Toolbar.TFrame", padding=(12, 4, 12, 8))
+        save_bar.grid(row=5, column=0, sticky=tk.EW)
         save_bar.columnconfigure(2, weight=1)
         ttk.Checkbutton(
             save_bar,
@@ -787,24 +1117,32 @@ class SerialDebugTool(tk.Tk):
             command=self._on_realtime_save_toggle,
         ).grid(row=0, column=0, sticky=tk.W)
         self.realtime_entry = ttk.Entry(save_bar, textvariable=self.realtime_path_var)
-        self.realtime_entry.grid(row=0, column=2, sticky=tk.EW, padx=(4, 4))
-        ttk.Button(save_bar, text="...", width=4, command=self.choose_realtime_file).grid(row=0, column=3)
+        self.realtime_entry.grid(row=0, column=2, sticky=tk.EW, padx=(8, 6))
+        ttk.Button(save_bar, text="...", width=4, command=self.choose_realtime_file, style="Small.TButton").grid(
+            row=0,
+            column=3,
+        )
 
-        receive_frame = ttk.Frame(parent)
+        receive_frame = ttk.Frame(parent, style="Card.TFrame", padding=(12, 8, 12, 12))
         receive_frame.grid(row=6, column=0, sticky=tk.NSEW)
         receive_frame.rowconfigure(1, weight=1)
         receive_frame.columnconfigure(2, weight=1)
 
-        ttk.Label(receive_frame, text="时间", anchor=tk.W).grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
-        ttk.Label(receive_frame, text="连接", anchor=tk.W).grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
-        ttk.Label(receive_frame, text="数据", anchor=tk.W).grid(row=0, column=2, sticky=tk.EW)
+        ttk.Label(receive_frame, text="时间", anchor=tk.W, style="Header.TLabel").grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(receive_frame, text="连接", anchor=tk.W, style="Header.TLabel").grid(row=0, column=1, sticky=tk.EW, padx=(0, 4))
+        ttk.Label(receive_frame, text="数据", anchor=tk.W, style="Header.TLabel").grid(row=0, column=2, sticky=tk.EW)
 
         self.receive_time_text = tk.Text(receive_frame, width=14, wrap=tk.NONE)
         self.receive_connection_text = tk.Text(receive_frame, width=20, wrap=tk.NONE)
         self.receive_text = tk.Text(receive_frame, wrap=tk.NONE)
+        self._configure_text_widget(self.receive_time_text, mono=True)
+        self._configure_text_widget(self.receive_connection_text)
+        self._configure_text_widget(self.receive_text, mono=True)
         self.receive_time_text.grid(row=1, column=0, sticky=tk.NSEW, padx=(0, 4))
         self.receive_connection_text.grid(row=1, column=1, sticky=tk.NSEW, padx=(0, 4))
         self.receive_text.grid(row=1, column=2, sticky=tk.NSEW)
+        self.receive_empty_label = ttk.Label(receive_frame, text="暂无数据", style="Empty.TLabel")
+        self._show_empty_state(self.receive_empty_label, self.receive_text)
 
         y_scroll = ttk.Scrollbar(receive_frame, orient=tk.VERTICAL, command=self._receive_yview)
         y_scroll.grid(row=1, column=3, sticky=tk.NS)
@@ -820,12 +1158,35 @@ class SerialDebugTool(tk.Tk):
             widget.bind("<Button-5>", self._on_receive_mousewheel)
             self._install_text_context_menu(widget, editable=False)
 
+    def _install_send_placeholder(self) -> None:
+        self.send_text.tag_configure("placeholder", foreground=THEME["disabled"])
+        self.send_text.bind("<FocusIn>", self._clear_send_placeholder)
+        self.send_text.bind("<FocusOut>", self._restore_send_placeholder)
+        self._restore_send_placeholder()
+
+    def _clear_send_placeholder(self, _event: tk.Event | None = None) -> None:
+        if not getattr(self, "_send_placeholder_visible", False):
+            return
+        self.send_text.delete("1.0", tk.END)
+        self._send_placeholder_visible = False
+
+    def _restore_send_placeholder(self, _event: tk.Event | None = None) -> None:
+        if self.send_text.get("1.0", "end-1c"):
+            return
+        self._send_placeholder_visible = True
+        self.send_text.insert("1.0", "在此输入要发送的数据...", "placeholder")
+
+    def _send_text_content(self) -> str:
+        if getattr(self, "_send_placeholder_visible", False):
+            return ""
+        return self.send_text.get("1.0", "end-1c")
+
     def _install_text_context_menu(self, widget: tk.Text, editable: bool) -> None:
         widget.bind("<Button-3>", lambda event, item=widget, can_edit=editable: self._show_text_context_menu(event, item, can_edit))
 
     def _show_text_context_menu(self, event: tk.Event, widget: tk.Text, editable: bool) -> str:
         widget.focus_set()
-        menu = tk.Menu(self, tearoff=False)
+        menu = self._create_menu(self)
         menu.add_command(label="复制", command=lambda: self._copy_text_selection(widget))
         if editable:
             menu.add_command(label="剪切", command=lambda: self._cut_text_selection(widget))
@@ -856,6 +1217,8 @@ class SerialDebugTool(tk.Tk):
             text = self.clipboard_get()
         except tk.TclError:
             return
+        if widget is getattr(self, "send_text", None):
+            self._clear_send_placeholder()
         widget.insert(tk.INSERT, text)
 
     def _receive_yview(self, *args: object) -> None:
@@ -883,10 +1246,35 @@ class SerialDebugTool(tk.Tk):
         return "break"
 
     def _build_status_bar(self) -> None:
-        status = ttk.Frame(self)
+        status = ttk.Frame(self, style="Status.TFrame", padding=(12, 4))
         status.pack(side=tk.BOTTOM, fill=tk.X)
-        ttk.Label(status, textvariable=self.status_var, style="Status.TLabel").pack(side=tk.LEFT)
+
+        self.status_dot = tk.Canvas(
+            status,
+            width=12,
+            height=12,
+            bg=THEME["bg_alt"],
+            highlightthickness=0,
+            bd=0,
+        )
+        self.status_dot_item = self.status_dot.create_oval(2, 2, 10, 10, fill=THEME["status_disconnected"], outline="")
+        self.status_dot.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(status, textvariable=self.connection_state_var, style="StatusStrong.TLabel").pack(side=tk.LEFT)
+        ttk.Label(status, textvariable=self.connection_address_var, style="Status.TLabel").pack(side=tk.LEFT)
+        ttk.Label(status, textvariable=self.status_var, style="Status.TLabel").pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(status, textvariable=self.speed_var, style="Status.TLabel").pack(side=tk.RIGHT)
+        ttk.Label(status, textvariable=self.count_var, style="Status.TLabel").pack(side=tk.RIGHT)
+        self._refresh_status_summary()
+
+    def _refresh_status_summary(self) -> None:
+        connected = self.is_connected
+        self.connection_state_var.set("已连接" if connected else "已断开")
+        session = self.active_session
+        address = session.name if session is not None else self.mode_var.get()
+        self.connection_address_var.set(address or self.mode_var.get())
+        if hasattr(self, "status_dot"):
+            color = THEME["success"] if connected else THEME["status_disconnected"]
+            self.status_dot.itemconfigure(self.status_dot_item, fill=color)
 
     def _load_config_on_start(self) -> None:
         if not self.config_path.exists():
@@ -1390,7 +1778,7 @@ class SerialDebugTool(tk.Tk):
         self.port_tree.focus(tree_id)
         self._on_tree_select(event)
 
-        menu = tk.Menu(self, tearoff=False)
+        menu = self._create_menu(self)
         mode = self._mode_by_root_id(tree_id)
         session = self._session_by_tree_id(tree_id)
 
@@ -1921,6 +2309,7 @@ class SerialDebugTool(tk.Tk):
             text = "关闭连接" if connected else "打开连接"
         self.connect_btn.configure(text=text)
         self._update_connection_buttons()
+        self._refresh_status_summary()
 
     def _apply_line_state(self, session: ConnectionSession | None = None) -> None:
         session = session or self.active_session
@@ -2024,6 +2413,8 @@ class SerialDebugTool(tk.Tk):
         time_text = self._metadata_column_text(timestamp, row_count)
         connection_text = self._metadata_column_text(connection, row_count)
 
+        if hasattr(self, "send_empty_label"):
+            self._hide_empty_state(self.send_empty_label)
         self._set_send_widgets_state(tk.NORMAL)
         self.send_time_text.insert(tk.END, time_text)
         self.send_connection_text.insert(tk.END, connection_text)
@@ -2038,6 +2429,8 @@ class SerialDebugTool(tk.Tk):
         time_text = self._metadata_column_text(timestamp, row_count)
         connection_text = self._metadata_column_text(connection, row_count)
 
+        if hasattr(self, "receive_empty_label"):
+            self._hide_empty_state(self.receive_empty_label)
         self._set_receive_widgets_state(tk.NORMAL)
         self.receive_time_text.insert(tk.END, time_text)
         self.receive_connection_text.insert(tk.END, connection_text)
@@ -2171,7 +2564,7 @@ class SerialDebugTool(tk.Tk):
             data = path.read_bytes()
             should_update_send_area = False
         else:
-            text = self.send_text.get("1.0", "end-1c")
+            text = self._send_text_content()
             if self.hex_send_var.get():
                 data = parse_hex_payload(text)
             else:
@@ -2196,6 +2589,7 @@ class SerialDebugTool(tk.Tk):
     def _write_full_payload_to_send_area(self, data: bytes) -> None:
         if not self.hex_send_var.get():
             self.hex_send_var.set(True)
+        self._send_placeholder_visible = False
         self.send_text.delete("1.0", tk.END)
         self.send_text.insert("1.0", bytes_to_hex(data))
         self._schedule_config_save()
@@ -2285,17 +2679,23 @@ class SerialDebugTool(tk.Tk):
             self.status_var.set(f"实时保存失败: {exc}")
 
     def clear_send(self) -> None:
+        self._send_placeholder_visible = False
         self.send_text.delete("1.0", tk.END)
+        self._restore_send_placeholder()
         self._set_send_widgets_state(tk.NORMAL)
         for widget in self.send_history_widgets:
             widget.delete("1.0", tk.END)
         self._set_send_widgets_state(tk.DISABLED)
+        if hasattr(self, "send_empty_label"):
+            self._show_empty_state(self.send_empty_label, self.send_history_text)
 
     def clear_receive(self) -> None:
         self._set_receive_widgets_state(tk.NORMAL)
         for widget in self.receive_widgets:
             widget.delete("1.0", tk.END)
         self._set_receive_widgets_state(tk.DISABLED)
+        if hasattr(self, "receive_empty_label"):
+            self._show_empty_state(self.receive_empty_label, self.receive_text)
 
     def clear_counts(self) -> None:
         session = self.active_session
@@ -2344,10 +2744,12 @@ class SerialDebugTool(tk.Tk):
         session = self.active_session
         if session is not None:
             self.count_var.set(f"发送: {session.sent_bytes} 字节    接收: {session.recv_bytes} 字节")
+            self._refresh_status_summary()
             return
         sent_total = sum(item.sent_bytes for item in self.sessions.values())
         recv_total = sum(item.recv_bytes for item in self.sessions.values())
         self.count_var.set(f"发送: {sent_total} 字节    接收: {recv_total} 字节")
+        self._refresh_status_summary()
 
     def _update_speed(self) -> None:
         session = self.active_session
