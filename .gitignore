@@ -11,6 +11,7 @@ venv/
 *.log
 
 assets/*.generated.ico
+Serial-port-debugging-tools.zip
 
 dist/*
 !dist/
