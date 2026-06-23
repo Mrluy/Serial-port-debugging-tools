@@ -73,7 +73,7 @@ from main import (
 )
 
 
-DEFAULT_GEOMETRY = "1500x900"
+DEFAULT_GEOMETRY = "1500x840"
 DEFAULT_LEFT_PANEL_WIDTH = 360
 THEME = {
     "bg": "#0B1220",
@@ -109,7 +109,7 @@ class EmptyTable(QTableWidget):
         self.setColumnCount(3)
         self.setHorizontalHeaderLabels(("时间", "连接", "数据"))
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(34)
+        self.verticalHeader().setDefaultSectionSize(30)
         self.setShowGrid(False)
         self.setAlternatingRowColors(False)
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -165,8 +165,8 @@ class SerialDebugQtTool(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
-        self.resize(1500, 900)
-        self.setMinimumSize(1180, 760)
+        self.resize(1500, 840)
+        self.setMinimumSize(1180, 700)
         self._set_window_icon()
 
         self.sessions: dict[int, ConnectionSession] = {}
@@ -293,7 +293,7 @@ class SerialDebugQtTool(QMainWindow):
             letter-spacing: 0;
         }}
         QLabel#SectionTitle {{
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 700;
             color: {THEME["text"]};
         }}
@@ -309,7 +309,7 @@ class SerialDebugQtTool(QMainWindow):
         }}
         QMenuBar::item {{
             background: transparent;
-            padding: 8px 10px;
+            padding: 6px 10px;
         }}
         QMenuBar::item:selected {{
             color: {THEME["text"]};
@@ -343,15 +343,15 @@ class SerialDebugQtTool(QMainWindow):
             color: {THEME["text"]};
             border: 1px solid {THEME["border"]};
             border-radius: 6px;
-            min-height: 28px;
-            padding: 5px 10px;
+            min-height: 24px;
+            padding: 4px 8px;
             selection-background-color: {THEME["accent"]};
         }}
         QComboBox, QSpinBox {{
             min-width: 74px;
         }}
         QTextEdit {{
-            padding: 10px;
+            padding: 8px;
         }}
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {{
             border-color: {THEME["accent"]};
@@ -376,8 +376,8 @@ class SerialDebugQtTool(QMainWindow):
             color: {THEME["text"]};
             border: 1px solid {THEME["border"]};
             border-radius: 6px;
-            padding: 8px 15px;
-            min-height: 28px;
+            padding: 6px 12px;
+            min-height: 24px;
             font-weight: 600;
         }}
         QPushButton:hover {{
@@ -402,26 +402,26 @@ class SerialDebugQtTool(QMainWindow):
             background: {THEME["accent_hover"]};
         }}
         QPushButton#ActionButton {{
-            min-height: 36px;
+            min-height: 32px;
             font-size: 14px;
             font-weight: 700;
         }}
         QPushButton#SendButton {{
             min-width: 82px;
-            min-height: 34px;
+            min-height: 30px;
         }}
         QPushButton#IconButton {{
-            min-width: 42px;
+            min-width: 38px;
             padding-left: 9px;
             padding-right: 9px;
         }}
         QCheckBox {{
-            spacing: 7px;
+            spacing: 6px;
             color: {THEME["text"]};
         }}
         QCheckBox::indicator {{
-            width: 15px;
-            height: 15px;
+            width: 14px;
+            height: 14px;
             border: 1px solid {THEME["border"]};
             border-radius: 4px;
             background: {THEME["input"]};
@@ -442,8 +442,8 @@ class SerialDebugQtTool(QMainWindow):
             padding: 6px;
         }}
         QTreeWidget::item {{
-            min-height: 28px;
-            padding: 3px 6px;
+            min-height: 26px;
+            padding: 2px 6px;
             border-radius: 5px;
         }}
         QTreeWidget::item:selected {{
@@ -458,12 +458,12 @@ class SerialDebugQtTool(QMainWindow):
             color: {THEME["text"]};
             border: 0;
             border-right: 1px solid {THEME["border_soft"]};
-            padding: 9px 10px;
+            padding: 7px 8px;
             font-weight: 600;
         }}
         QTableWidget::item {{
             border: 0;
-            padding: 7px 10px;
+            padding: 5px 8px;
         }}
         QTableWidget::item:selected {{
             background: {THEME["accent_soft"]};
@@ -482,7 +482,7 @@ class SerialDebugQtTool(QMainWindow):
             border-bottom: 0;
             border-top-left-radius: 6px;
             border-top-right-radius: 6px;
-            padding: 9px 18px;
+            padding: 7px 16px;
             margin-right: 4px;
         }}
         QTabBar::tab:selected {{
@@ -539,7 +539,7 @@ class SerialDebugQtTool(QMainWindow):
         header = QWidget()
         header.setObjectName("Header")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(18, 10, 18, 10)
+        layout.setContentsMargins(18, 8, 18, 8)
         layout.setSpacing(14)
 
         icon_label = QLabel()
@@ -597,7 +597,7 @@ class SerialDebugQtTool(QMainWindow):
 
     def _make_window_menu(self) -> QMenu:
         menu = QMenu("窗口(W)", self)
-        menu.addAction("恢复默认大小", lambda: self.resize(1500, 900))
+        menu.addAction("恢复默认大小", lambda: self.resize(1500, 840))
         return menu
 
     def _make_help_menu(self) -> QMenu:
@@ -609,8 +609,8 @@ class SerialDebugQtTool(QMainWindow):
         card = QFrame()
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 12, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
         layout.addWidget(self._section_label(title))
         return card, layout
 
@@ -641,11 +641,11 @@ class SerialDebugQtTool(QMainWindow):
         panel = QWidget()
         panel.setObjectName("SidebarContent")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         list_box, list_layout = self._card("连接列表")
-        list_box.setMinimumHeight(232)
+        list_box.setMinimumHeight(210)
         self.connection_tree = QTreeWidget()
         self.connection_tree.setHeaderHidden(True)
         self.connection_tree.setIndentation(18)
@@ -675,8 +675,8 @@ class SerialDebugQtTool(QMainWindow):
 
         serial_grid = QGridLayout()
         serial_grid.setContentsMargins(0, 0, 0, 0)
-        serial_grid.setHorizontalSpacing(12)
-        serial_grid.setVerticalSpacing(8)
+        serial_grid.setHorizontalSpacing(10)
+        serial_grid.setVerticalSpacing(6)
         serial_grid.setColumnStretch(0, 1)
         serial_grid.setColumnStretch(1, 1)
         serial_grid.setColumnStretch(2, 1)
@@ -710,8 +710,8 @@ class SerialDebugQtTool(QMainWindow):
         self.network_box, network_body = self._card("网络参数")
         network_layout = QGridLayout()
         network_layout.setContentsMargins(0, 0, 0, 0)
-        network_layout.setVerticalSpacing(10)
-        network_layout.setHorizontalSpacing(12)
+        network_layout.setVerticalSpacing(8)
+        network_layout.setHorizontalSpacing(10)
         network_layout.setColumnStretch(0, 1)
         network_layout.setColumnStretch(1, 1)
         self.remote_host_edit = QLineEdit("127.0.0.1")
@@ -735,7 +735,7 @@ class SerialDebugQtTool(QMainWindow):
         action_box, action_layout = self._card("连接操作")
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
-        button_row.setSpacing(10)
+        button_row.setSpacing(8)
         self.create_btn = self._button("创建连接", primary=True)
         self.create_btn.setObjectName("ActionButton")
         self.create_btn.clicked.connect(self.create_connection)
@@ -754,7 +754,7 @@ class SerialDebugQtTool(QMainWindow):
         clear_count_btn.clicked.connect(self.clear_counts)
         count_row = QHBoxLayout()
         count_row.setContentsMargins(0, 0, 0, 0)
-        count_row.setSpacing(10)
+        count_row.setSpacing(8)
         count_row.addWidget(self.count_label, 1)
         count_row.addWidget(clear_count_btn)
         count_layout.addLayout(count_row)
@@ -768,19 +768,19 @@ class SerialDebugQtTool(QMainWindow):
     def _build_workspace(self) -> QWidget:
         workspace = QWidget()
         layout = QVBoxLayout(workspace)
-        layout.setContentsMargins(10, 10, 12, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 10, 8)
+        layout.setSpacing(6)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         session = QWidget()
         session_layout = QVBoxLayout(session)
-        session_layout.setContentsMargins(10, 10, 10, 10)
-        session_layout.setSpacing(10)
+        session_layout.setContentsMargins(8, 8, 8, 8)
+        session_layout.setSpacing(8)
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self._build_send_card())
         splitter.addWidget(self._build_receive_card())
         splitter.setChildrenCollapsible(False)
-        splitter.setSizes((440, 430))
+        splitter.setSizes((392, 392))
         session_layout.addWidget(splitter)
         self.tabs.addTab(session, "串口会话")
         layout.addWidget(self.tabs)
@@ -790,18 +790,18 @@ class SerialDebugQtTool(QMainWindow):
         card = QFrame()
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 14, 18, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(7)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(14)
+        header.setSpacing(10)
         header.addWidget(self._section_label("发送区"))
         self.hex_send_check = QCheckBox("16进制")
         self.append_crlf_check = QCheckBox("追加CRLF")
         self.auto_crc_check = QCheckBox("自动CRC")
         self.crc_combo = self._combo(CRC_ALGORITHMS, CRC_ALGORITHM_MODBUS)
-        self.crc_combo.setFixedWidth(168)
+        self.crc_combo.setFixedWidth(158)
         header.addWidget(self.hex_send_check)
         header.addWidget(self.append_crlf_check)
         header.addWidget(self.auto_crc_check)
@@ -811,8 +811,8 @@ class SerialDebugQtTool(QMainWindow):
         self.send_btn.setObjectName("SendButton")
         self.stop_btn = self._button("停止")
         self.clear_send_btn = self._button("清空")
-        self.stop_btn.setMinimumWidth(74)
-        self.clear_send_btn.setMinimumWidth(74)
+        self.stop_btn.setMinimumWidth(68)
+        self.clear_send_btn.setMinimumWidth(68)
         self.send_btn.clicked.connect(self.send_now)
         self.stop_btn.clicked.connect(self.stop_auto_send)
         self.clear_send_btn.clicked.connect(self.clear_send)
@@ -823,20 +823,20 @@ class SerialDebugQtTool(QMainWindow):
 
         file_row = QHBoxLayout()
         file_row.setContentsMargins(0, 0, 0, 0)
-        file_row.setSpacing(10)
+        file_row.setSpacing(8)
         self.send_file_check = QCheckBox("发送文件")
         self.auto_send_check = QCheckBox("自动发送")
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(10, 999999)
         self.interval_spin.setValue(1000)
-        self.interval_spin.setFixedWidth(96)
+        self.interval_spin.setFixedWidth(88)
         self.interval_spin.setSuffix("")
         file_row.addWidget(self.send_file_check)
         file_row.addWidget(self.auto_send_check)
         file_row.addWidget(QLabel("间隔"))
         file_row.addWidget(self.interval_spin)
         file_row.addWidget(QLabel("ms"))
-        file_row.addSpacing(10)
+        file_row.addSpacing(6)
         file_label = QLabel("文件:")
         file_label.setProperty("muted", True)
         file_row.addWidget(file_label)
@@ -849,15 +849,15 @@ class SerialDebugQtTool(QMainWindow):
         layout.addLayout(file_row)
 
         self.send_table = EmptyTable()
-        self.send_table.setMinimumHeight(200)
+        self.send_table.setMinimumHeight(168)
         layout.addWidget(self.send_table, 1)
         input_label = QLabel("发送内容")
         input_label.setProperty("muted", True)
         layout.addWidget(input_label)
         self.send_edit = QTextEdit()
         self.send_edit.setPlaceholderText("在此输入要发送的数据...")
-        self.send_edit.setMinimumHeight(104)
-        self.send_edit.setMaximumHeight(150)
+        self.send_edit.setMinimumHeight(72)
+        self.send_edit.setMaximumHeight(108)
         layout.addWidget(self.send_edit)
         self._toggle_file_send_controls()
         self._toggle_crc_controls()
@@ -867,20 +867,20 @@ class SerialDebugQtTool(QMainWindow):
         card = QFrame()
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 14, 18, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(7)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(12)
+        header.setSpacing(10)
         header.addWidget(self._section_label("接收区"))
         header.addStretch(1)
         self.pause_display_check = QCheckBox("暂停显示")
         self.hex_recv_check = QCheckBox("16进制")
         clear_btn = self._button("清空")
         save_btn = self._button("保存")
-        clear_btn.setMinimumWidth(74)
-        save_btn.setMinimumWidth(74)
+        clear_btn.setMinimumWidth(68)
+        save_btn.setMinimumWidth(68)
         clear_btn.clicked.connect(self.clear_receive)
         save_btn.clicked.connect(self.save_receive)
         header.addWidget(self.pause_display_check)
@@ -891,7 +891,7 @@ class SerialDebugQtTool(QMainWindow):
 
         realtime_row = QHBoxLayout()
         realtime_row.setContentsMargins(0, 0, 0, 0)
-        realtime_row.setSpacing(10)
+        realtime_row.setSpacing(8)
         self.realtime_save_check = QCheckBox("保存到文件(实时)")
         self.realtime_edit = QLineEdit()
         realtime_btn = self._button("...")
@@ -903,7 +903,7 @@ class SerialDebugQtTool(QMainWindow):
         layout.addLayout(realtime_row)
 
         self.receive_table = EmptyTable()
-        self.receive_table.setMinimumHeight(255)
+        self.receive_table.setMinimumHeight(200)
         layout.addWidget(self.receive_table, 1)
         return card
 
@@ -911,7 +911,7 @@ class SerialDebugQtTool(QMainWindow):
         bar = QWidget()
         bar.setObjectName("StatusBar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(18, 7, 18, 7)
+        layout.setContentsMargins(18, 5, 18, 5)
         layout.setSpacing(12)
         self.status_dot = QLabel()
         self.status_dot.setPixmap(self.status_icons["disconnected"].pixmap(14, 14))
