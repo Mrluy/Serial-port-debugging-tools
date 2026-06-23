@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStyle,
+    QStyleOptionButton,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -101,6 +103,30 @@ THEME = {
 }
 
 
+class TickCheckBox(QCheckBox):
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().paintEvent(event)
+        if not self.isChecked():
+            return
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        rect = self.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, option, self)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(
+            QPen(
+                QColor("#FFFFFF"),
+                1.8,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        painter.drawLine(rect.left() + 4, rect.center().y(), rect.center().x() - 1, rect.bottom() - 4)
+        painter.drawLine(rect.center().x() - 1, rect.bottom() - 4, rect.right() - 3, rect.top() + 4)
+        painter.end()
+
+
 class EmptyTable(QTableWidget):
     def __init__(
         self,
@@ -111,6 +137,7 @@ class EmptyTable(QTableWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.default_row_height = 20
         self.mono_columns = set(mono_columns)
         self.empty_text = empty_text
         self.data_font = QFont("Consolas")
@@ -118,13 +145,13 @@ class EmptyTable(QTableWidget):
         self.setColumnCount(len(headers))
         self.setHorizontalHeaderLabels(headers)
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(24)
+        self.verticalHeader().setDefaultSectionSize(self.default_row_height)
         self.setShowGrid(False)
         self.setAlternatingRowColors(False)
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.setWordWrap(False)
+        self.setWordWrap(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         header = self.horizontalHeader()
         stretch_col = max(0, len(headers) - 1)
@@ -389,8 +416,8 @@ class SerialDebugQtTool(QMainWindow):
             color: {THEME["text"]};
             border: 1px solid {THEME["border"]};
             border-radius: 6px;
-            padding: 6px 12px;
-            min-height: 24px;
+            padding: 3px 10px;
+            min-height: 17px;
             font-weight: 600;
         }}
         QPushButton:hover {{
@@ -415,16 +442,16 @@ class SerialDebugQtTool(QMainWindow):
             background: {THEME["accent_hover"]};
         }}
         QPushButton#ActionButton {{
-            min-height: 32px;
+            min-height: 22px;
             font-size: 14px;
             font-weight: 700;
         }}
         QPushButton#SendButton {{
             min-width: 82px;
-            min-height: 30px;
+            min-height: 21px;
         }}
         QPushButton#IconButton {{
-            min-width: 38px;
+            min-width: 32px;
             padding-left: 9px;
             padding-right: 9px;
         }}
@@ -471,12 +498,12 @@ class SerialDebugQtTool(QMainWindow):
             color: {THEME["text"]};
             border: 0;
             border-right: 1px solid {THEME["border_soft"]};
-            padding: 7px 8px;
+            padding: 5px 6px;
             font-weight: 600;
         }}
         QTableWidget::item {{
             border: 0;
-            padding: 2px 6px;
+            padding: 1px 4px;
         }}
         QTableWidget::item:selected {{
             background: {THEME["accent_soft"]};
@@ -710,9 +737,9 @@ class SerialDebugQtTool(QMainWindow):
         line_row = QHBoxLayout()
         line_row.setContentsMargins(0, 0, 0, 0)
         line_row.setSpacing(14)
-        self.dtr_check = QCheckBox("DTR")
+        self.dtr_check = TickCheckBox("DTR")
         self.dtr_check.setChecked(True)
-        self.rts_check = QCheckBox("RTS")
+        self.rts_check = TickCheckBox("RTS")
         self.rts_check.setChecked(True)
         line_row.addWidget(self.dtr_check)
         line_row.addWidget(self.rts_check)
@@ -793,7 +820,7 @@ class SerialDebugQtTool(QMainWindow):
         splitter.addWidget(self._build_send_card())
         splitter.addWidget(self._build_receive_card())
         splitter.setChildrenCollapsible(False)
-        splitter.setSizes((392, 392))
+        splitter.setSizes((300, 500))
         session_layout.addWidget(splitter)
         self.tabs.addTab(session, "串口会话")
         layout.addWidget(self.tabs)
@@ -810,9 +837,9 @@ class SerialDebugQtTool(QMainWindow):
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(10)
         header.addWidget(self._section_label("发送区"))
-        self.hex_send_check = QCheckBox("16进制")
-        self.append_crlf_check = QCheckBox("追加CRLF")
-        self.auto_crc_check = QCheckBox("自动CRC")
+        self.hex_send_check = TickCheckBox("16进制")
+        self.append_crlf_check = TickCheckBox("追加CRLF")
+        self.auto_crc_check = TickCheckBox("自动CRC")
         self.crc_combo = self._combo(CRC_ALGORITHMS, CRC_ALGORITHM_MODBUS)
         self.crc_combo.setFixedWidth(158)
         header.addWidget(self.hex_send_check)
@@ -824,8 +851,8 @@ class SerialDebugQtTool(QMainWindow):
         self.send_btn.setObjectName("SendButton")
         self.stop_btn = self._button("停止")
         self.clear_send_btn = self._button("清空")
-        self.stop_btn.setMinimumWidth(68)
-        self.clear_send_btn.setMinimumWidth(68)
+        self.stop_btn.setMinimumWidth(62)
+        self.clear_send_btn.setMinimumWidth(62)
         self.send_btn.clicked.connect(self.send_now)
         self.stop_btn.clicked.connect(self.stop_auto_send)
         self.clear_send_btn.clicked.connect(self.clear_send)
@@ -837,8 +864,8 @@ class SerialDebugQtTool(QMainWindow):
         file_row = QHBoxLayout()
         file_row.setContentsMargins(0, 0, 0, 0)
         file_row.setSpacing(8)
-        self.send_file_check = QCheckBox("发送文件")
-        self.auto_send_check = QCheckBox("自动发送")
+        self.send_file_check = TickCheckBox("发送文件")
+        self.auto_send_check = TickCheckBox("自动发送")
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(10, 999999)
         self.interval_spin.setValue(1000)
@@ -866,7 +893,7 @@ class SerialDebugQtTool(QMainWindow):
         layout.addWidget(input_label)
         self.send_edit = QTextEdit()
         self.send_edit.setPlaceholderText("在此输入要发送的数据...")
-        self.send_edit.setMinimumHeight(180)
+        self.send_edit.setMinimumHeight(126)
         layout.addWidget(self.send_edit, 1)
         self._toggle_file_send_controls()
         self._toggle_crc_controls()
@@ -884,12 +911,12 @@ class SerialDebugQtTool(QMainWindow):
         header.setSpacing(10)
         header.addWidget(self._section_label("接收区"))
         header.addStretch(1)
-        self.pause_display_check = QCheckBox("暂停显示")
-        self.hex_recv_check = QCheckBox("16进制")
+        self.pause_display_check = TickCheckBox("暂停显示")
+        self.hex_recv_check = TickCheckBox("16进制")
         clear_btn = self._button("清空")
         save_btn = self._button("保存")
-        clear_btn.setMinimumWidth(68)
-        save_btn.setMinimumWidth(68)
+        clear_btn.setMinimumWidth(62)
+        save_btn.setMinimumWidth(62)
         clear_btn.clicked.connect(self.clear_receive)
         save_btn.clicked.connect(self.save_receive)
         header.addWidget(self.pause_display_check)
@@ -901,7 +928,7 @@ class SerialDebugQtTool(QMainWindow):
         realtime_row = QHBoxLayout()
         realtime_row.setContentsMargins(0, 0, 0, 0)
         realtime_row.setSpacing(8)
-        self.realtime_save_check = QCheckBox("保存到文件(实时)")
+        self.realtime_save_check = TickCheckBox("保存到文件(实时)")
         self.realtime_edit = QLineEdit()
         realtime_btn = self._button("...")
         realtime_btn.setObjectName("IconButton")
@@ -1908,6 +1935,10 @@ class SerialDebugQtTool(QMainWindow):
             if col in getattr(table, "mono_columns", set()) and hasattr(table, "data_font"):
                 item.setFont(table.data_font)
             table.setItem(row, col, item)
+        table.resizeRowToContents(row)
+        default_height = getattr(table, "default_row_height", 20)
+        if table.rowHeight(row) < default_height:
+            table.setRowHeight(row, default_height)
         table.scrollToBottom()
 
     def _format_sent_data(self, data: bytes) -> str:
