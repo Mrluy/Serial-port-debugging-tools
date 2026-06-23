@@ -2,7 +2,7 @@
 
 一个面向 Windows 的本地调试工具，支持 COM 串口、TCP 客户端、TCP 服务端、UDP 客户端、UDP 服务端收发测试。项目提供免安装单文件 EXE，目标电脑无需安装 Python 或额外运行环境。
 
-当前版本：`v1.0.0`
+当前版本：`v1.0.1`
 
 ## 适用场景
 
@@ -17,6 +17,8 @@
 - 支持波特率、数据位、校验位、停止位、流控、DTR、RTS 设置
 - 支持 TCP 客户端、TCP 服务端、UDP 客户端、UDP 服务端
 - 每种网络类型下可以创建多个连接配置
+- 自动保存配置到 `%APPDATA%\Serial-port-debugging-tools\config.json`
+- 支持配置导入、导出和清除
 - 连接列表中蓝色圆点表示未连接，绿色圆点表示已连接
 - 同一时间只允许打开一个连接，打开新连接时会先关闭当前连接
 - TCP 服务端支持多个客户端接入，发送时广播给所有已连接客户端
@@ -139,6 +141,22 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name "COM串口
 
 自动 CRC 同时适用于手动发送、自动发送和文件发送。
 
+## 配置保存
+
+程序会在启动时自动读取配置，并在修改串口参数、网络参数、发送/接收选项或连接列表后自动保存。
+
+配置文件固定保存在：
+
+```text
+%APPDATA%\Serial-port-debugging-tools\config.json
+```
+
+菜单 `配置(C)` 提供：
+
+- `导入配置`：从 JSON 文件导入配置，并同步保存到 `%APPDATA%`
+- `导出配置`：把当前配置导出为 JSON 文件
+- `清除配置`：删除已保存配置并恢复默认设置
+
 ## 开发检查
 
 提交前可以运行：
@@ -162,8 +180,7 @@ python -m unittest discover -s tests
 │  └─ make_icon.py          # PNG 转 ICO 工具
 ├─ tests\
 │  └─ test_payload.py       # 基础单元测试
-└─ dist\
-   └─ COM串口调试工具.exe   # 打包后的单文件程序
+└─ dist\                   # 本地打包输出目录，不提交 release 文件
 ```
 
 ## 常见问题

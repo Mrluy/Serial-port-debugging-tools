@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import queue
 import re
 import socket
@@ -24,9 +26,14 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
+CONFIG_DIR_NAME = "Serial-port-debugging-tools"
+CONFIG_FILE_NAME = "config.json"
+CONFIG_SCHEMA_VERSION = 1
+DEFAULT_GEOMETRY = "1180x760"
+DEFAULT_LEFT_PANEL_WIDTH = 125
 MODE_SERIAL = "COM串口"
 MODE_TCP_CLIENT = "TCP客户端"
 MODE_TCP_SERVER = "TCP服务端"
@@ -59,6 +66,25 @@ FLOW_OPTIONS = ("无", "RTS/CTS", "XON/XOFF", "DSR/DTR")
 ENCODINGS = ("utf-8", "gbk", "ascii", "latin-1")
 CRC_ALGORITHM_MODBUS = "CRC16-Modbus"
 CRC_ALGORITHMS = (CRC_ALGORITHM_MODBUS,)
+
+
+def app_config_path(appdata_dir: str | Path | None = None) -> Path:
+    if appdata_dir is None:
+        appdata_dir = os.environ.get("APPDATA")
+    base_dir = Path(appdata_dir) if appdata_dir else Path.home() / "AppData" / "Roaming"
+    return base_dir / CONFIG_DIR_NAME / CONFIG_FILE_NAME
+
+
+def config_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
 
 
 def parse_hex_payload(text: str) -> bytes:
@@ -306,7 +332,7 @@ class SerialDebugTool(tk.Tk):
         super().__init__()
         self.title(APP_TITLE)
         self._set_window_icon()
-        self.geometry("1180x760")
+        self.geometry(DEFAULT_GEOMETRY)
         self.minsize(980, 620)
 
         self.sessions: dict[int, ConnectionSession] = {}
@@ -315,6 +341,10 @@ class SerialDebugTool(tk.Tk):
         self.active_session_id: int | None = None
         self.rx_queue: queue.Queue[tuple[str, int, bytes | str]] = queue.Queue()
         self.auto_send_job: str | None = None
+        self.config_path = app_config_path()
+        self._loading_config = True
+        self._config_save_after_id: str | None = None
+        self._config_trace_tokens: list[tuple[tk.Variable, str]] = []
 
         self.sent_bytes = 0
         self.recv_bytes = 0
@@ -363,6 +393,9 @@ class SerialDebugTool(tk.Tk):
         self._build_status_bar()
 
         self.refresh_ports()
+        self._load_config_on_start()
+        self._bind_config_traces()
+        self._loading_config = False
         self._set_connected_state(False)
         self.after(60, self._drain_rx_queue)
         self.after(1000, self._update_speed)
@@ -429,8 +462,15 @@ class SerialDebugTool(tk.Tk):
         view_menu.add_command(label="清空计数", command=self.clear_counts)
         menu_bar.add_cascade(label="查看(V)", menu=view_menu)
 
+        config_menu = tk.Menu(menu_bar, tearoff=False)
+        config_menu.add_command(label="导入配置", command=self.import_config)
+        config_menu.add_command(label="导出配置", command=self.export_config)
+        config_menu.add_separator()
+        config_menu.add_command(label="清除配置", command=self.clear_config)
+        menu_bar.add_cascade(label="配置(C)", menu=config_menu)
+
         window_menu = tk.Menu(menu_bar, tearoff=False)
-        window_menu.add_command(label="恢复默认大小", command=lambda: self.geometry("1180x760"))
+        window_menu.add_command(label="恢复默认大小", command=lambda: self.geometry(DEFAULT_GEOMETRY))
         menu_bar.add_cascade(label="窗口(W)", menu=window_menu)
 
         help_menu = tk.Menu(menu_bar, tearoff=False)
@@ -443,7 +483,8 @@ class SerialDebugTool(tk.Tk):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(paned, width=250, padding=(6, 4))
+        left = ttk.Frame(paned, width=DEFAULT_LEFT_PANEL_WIDTH, padding=(4, 4))
+        left.pack_propagate(False)
         right = ttk.Frame(paned, padding=(4, 4))
         paned.add(left, weight=0)
         paned.add(right, weight=1)
@@ -735,6 +776,412 @@ class SerialDebugTool(tk.Tk):
         ttk.Label(status, textvariable=self.status_var, style="Status.TLabel").pack(side=tk.LEFT)
         ttk.Label(status, textvariable=self.speed_var, style="Status.TLabel").pack(side=tk.RIGHT)
 
+    def _load_config_on_start(self) -> None:
+        if not self.config_path.exists():
+            return
+        try:
+            data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("配置文件格式错误")
+            self._apply_config(data)
+            self.status_var.set(f"已加载配置: {self.config_path}")
+        except Exception as exc:
+            self.status_var.set(f"配置加载失败: {exc}")
+
+    def _bind_config_traces(self) -> None:
+        variables: tuple[tk.Variable, ...] = (
+            self.port_var,
+            self.baud_var,
+            self.data_bits_var,
+            self.parity_var,
+            self.stop_bits_var,
+            self.flow_var,
+            self.encoding_var,
+            self.dtr_var,
+            self.rts_var,
+            self.remote_host_var,
+            self.remote_port_var,
+            self.local_host_var,
+            self.local_port_var,
+            self.hex_send_var,
+            self.hex_recv_var,
+            self.send_newline_var,
+            self.auto_crc_var,
+            self.crc_algorithm_var,
+            self.auto_send_var,
+            self.interval_var,
+            self.send_file_var,
+            self.send_file_path_var,
+            self.pause_display_var,
+            self.timestamp_var,
+            self.realtime_save_var,
+            self.realtime_path_var,
+        )
+        for variable in variables:
+            token = variable.trace_add("write", self._on_config_var_changed)
+            self._config_trace_tokens.append((variable, token))
+
+    def _on_config_var_changed(self, *_args: object) -> None:
+        if self._loading_config:
+            return
+        self._sync_active_session_from_controls()
+        self._schedule_config_save()
+
+    def _schedule_config_save(self) -> None:
+        if self._loading_config:
+            return
+        if self._config_save_after_id is not None:
+            self.after_cancel(self._config_save_after_id)
+        self._config_save_after_id = self.after(200, self._save_config_now)
+
+    def _cancel_scheduled_config_save(self) -> None:
+        if self._config_save_after_id is not None:
+            self.after_cancel(self._config_save_after_id)
+            self._config_save_after_id = None
+
+    def _save_config_now(self) -> None:
+        self._config_save_after_id = None
+        if self._loading_config:
+            return
+        try:
+            self._sync_active_session_from_controls()
+            data = self._collect_config()
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self.config_path.with_suffix(".json.tmp")
+            temp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_path.replace(self.config_path)
+        except Exception as exc:
+            self.status_var.set(f"配置保存失败: {exc}")
+
+    def _collect_config(self) -> dict[str, object]:
+        return {
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "app_version": APP_VERSION,
+            "window": {"geometry": self.geometry()},
+            "mode": self.mode_var.get(),
+            "active_session_id": self.active_session_id,
+            "serial": {
+                "port": self.port_var.get(),
+                "baud": self.baud_var.get(),
+                "data_bits": self.data_bits_var.get(),
+                "parity": self.parity_var.get(),
+                "stop_bits": self.stop_bits_var.get(),
+                "flow": self.flow_var.get(),
+                "encoding": self.encoding_var.get(),
+                "dtr": self.dtr_var.get(),
+                "rts": self.rts_var.get(),
+            },
+            "network": {
+                "remote_host": self.remote_host_var.get(),
+                "remote_port": self.remote_port_var.get(),
+                "local_host": self.local_host_var.get(),
+                "local_port": self.local_port_var.get(),
+            },
+            "send": {
+                "hex_send": self.hex_send_var.get(),
+                "append_crlf": self.send_newline_var.get(),
+                "auto_crc": self.auto_crc_var.get(),
+                "crc_algorithm": self.crc_algorithm_var.get(),
+                "auto_send": self.auto_send_var.get(),
+                "interval": self.interval_var.get(),
+                "send_file": self.send_file_var.get(),
+                "send_file_path": self.send_file_path_var.get(),
+            },
+            "receive": {
+                "hex_recv": self.hex_recv_var.get(),
+                "pause_display": self.pause_display_var.get(),
+                "timestamp": self.timestamp_var.get(),
+                "realtime_save": self.realtime_save_var.get(),
+                "realtime_path": self.realtime_path_var.get(),
+            },
+            "connections": [
+                {
+                    "id": session.id,
+                    "mode": session.mode,
+                    "name": session.name,
+                    "config": dict(session.config),
+                }
+                for session in sorted(self.sessions.values(), key=lambda item: item.id)
+            ],
+        }
+
+    def _default_config(self) -> dict[str, object]:
+        return {
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "app_version": APP_VERSION,
+            "window": {"geometry": DEFAULT_GEOMETRY},
+            "mode": MODE_SERIAL,
+            "active_session_id": None,
+            "serial": {
+                "port": "",
+                "baud": "115200",
+                "data_bits": "8",
+                "parity": "无",
+                "stop_bits": "1",
+                "flow": "无",
+                "encoding": "utf-8",
+                "dtr": True,
+                "rts": True,
+            },
+            "network": {
+                "remote_host": "127.0.0.1",
+                "remote_port": "10123",
+                "local_host": "0.0.0.0",
+                "local_port": "10123",
+            },
+            "send": {
+                "hex_send": False,
+                "append_crlf": False,
+                "auto_crc": False,
+                "crc_algorithm": CRC_ALGORITHM_MODBUS,
+                "auto_send": False,
+                "interval": "1000",
+                "send_file": False,
+                "send_file_path": "",
+            },
+            "receive": {
+                "hex_recv": False,
+                "pause_display": False,
+                "timestamp": False,
+                "realtime_save": False,
+                "realtime_path": "",
+            },
+            "connections": [],
+        }
+
+    def _apply_config(self, data: dict[str, object]) -> None:
+        previous_loading = self._loading_config
+        self._loading_config = True
+        try:
+            window = self._config_section(data, "window")
+            geometry = window.get("geometry")
+            if isinstance(geometry, str) and geometry:
+                self.geometry(geometry)
+
+            serial_config = self._config_section(data, "serial")
+            self._set_string_var(self.port_var, serial_config.get("port"), "")
+            self._set_string_var(self.baud_var, serial_config.get("baud"), "115200")
+            self._set_string_var(self.data_bits_var, serial_config.get("data_bits"), "8")
+            self._set_string_var(self.parity_var, serial_config.get("parity"), "无")
+            self._set_string_var(self.stop_bits_var, serial_config.get("stop_bits"), "1")
+            self._set_string_var(self.flow_var, serial_config.get("flow"), "无")
+            self._set_string_var(self.encoding_var, serial_config.get("encoding"), "utf-8")
+            self.dtr_var.set(config_bool(serial_config.get("dtr"), True))
+            self.rts_var.set(config_bool(serial_config.get("rts"), True))
+
+            network_config = self._config_section(data, "network")
+            self._set_string_var(self.remote_host_var, network_config.get("remote_host"), "127.0.0.1")
+            self._set_string_var(self.remote_port_var, network_config.get("remote_port"), "10123")
+            self._set_string_var(self.local_host_var, network_config.get("local_host"), "0.0.0.0")
+            self._set_string_var(self.local_port_var, network_config.get("local_port"), "10123")
+
+            send_config = self._config_section(data, "send")
+            self.hex_send_var.set(config_bool(send_config.get("hex_send"), False))
+            self.send_newline_var.set(config_bool(send_config.get("append_crlf"), False))
+            self.auto_crc_var.set(config_bool(send_config.get("auto_crc"), False))
+            self._set_string_var(self.crc_algorithm_var, send_config.get("crc_algorithm"), CRC_ALGORITHM_MODBUS)
+            self.auto_send_var.set(config_bool(send_config.get("auto_send"), False))
+            self._set_string_var(self.interval_var, send_config.get("interval"), "1000")
+            self.send_file_var.set(config_bool(send_config.get("send_file"), False))
+            self._set_string_var(self.send_file_path_var, send_config.get("send_file_path"), "")
+
+            receive_config = self._config_section(data, "receive")
+            self.hex_recv_var.set(config_bool(receive_config.get("hex_recv"), False))
+            self.pause_display_var.set(config_bool(receive_config.get("pause_display"), False))
+            self.timestamp_var.set(config_bool(receive_config.get("timestamp"), False))
+            self.realtime_save_var.set(config_bool(receive_config.get("realtime_save"), False))
+            self._set_string_var(self.realtime_path_var, receive_config.get("realtime_path"), "")
+
+            self.sessions.clear()
+            self.next_session_id = 1
+            self.active_session_id = None
+            self._load_configured_sessions(data)
+
+            mode = data.get("mode")
+            if mode not in CONNECTION_MODES:
+                mode = MODE_SERIAL
+            self.mode_var.set(str(mode))
+
+            active_session_id = self._config_int(data.get("active_session_id"))
+            if active_session_id in self.sessions:
+                self.active_session_id = active_session_id
+
+            self._rebuild_connection_tree()
+            if self.active_session_id in self.sessions:
+                session = self.sessions[self.active_session_id]
+                self.mode_var.set(session.mode)
+                self._load_session_config(session)
+                self.notebook.tab(0, text=session.name)
+            else:
+                self.notebook.tab(0, text="串口会话")
+
+            self._toggle_file_send_controls()
+            self._toggle_crc_controls()
+            self._update_mode_controls()
+            self._set_connected_state(False)
+            self._update_counts()
+        finally:
+            self._loading_config = previous_loading
+
+    def _load_configured_sessions(self, data: dict[str, object]) -> None:
+        connections = data.get("connections")
+        if not isinstance(connections, list):
+            return
+
+        used_ids: set[int] = set()
+        for item in connections:
+            if not isinstance(item, dict):
+                continue
+            mode = item.get("mode")
+            if mode not in CONNECTION_MODES:
+                continue
+            config = item.get("config")
+            if not isinstance(config, dict):
+                config = {}
+            normalized_config = self._normalize_session_config(str(mode), config)
+            session_id = self._config_int(item.get("id"))
+            if session_id is None or session_id in used_ids:
+                session_id = self.next_session_id
+            used_ids.add(session_id)
+            self.next_session_id = max(self.next_session_id, session_id + 1)
+
+            raw_name = item.get("name")
+            base_name = str(raw_name) if raw_name else self._session_label(str(mode), normalized_config)
+            session = ConnectionSession(
+                id=session_id,
+                mode=str(mode),
+                name=self._unique_session_name(base_name),
+                config=normalized_config,
+            )
+            self.sessions[session.id] = session
+
+    def _normalize_session_config(self, mode: str, config: dict[object, object]) -> dict[str, str]:
+        normalized = {str(key): "" if value is None else str(value) for key, value in config.items()}
+        if mode == MODE_SERIAL:
+            normalized.setdefault("port", "")
+            normalized.setdefault("baud", "115200")
+            normalized.setdefault("data_bits", "8")
+            normalized.setdefault("parity", "无")
+            normalized.setdefault("stop_bits", "1")
+            normalized.setdefault("flow", "无")
+            normalized["dtr"] = "1" if config_bool(normalized.get("dtr"), True) else "0"
+            normalized["rts"] = "1" if config_bool(normalized.get("rts"), True) else "0"
+            return normalized
+
+        normalized.setdefault("remote_host", "127.0.0.1" if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT) else "")
+        normalized.setdefault("remote_port", "10123" if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT) else "")
+        normalized.setdefault("local_host", "0.0.0.0")
+        normalized.setdefault("local_port", "10123" if mode in (MODE_TCP_SERVER, MODE_UDP_SERVER) else "0")
+        return normalized
+
+    def _config_section(self, data: dict[str, object], key: str) -> dict[str, object]:
+        section = data.get(key)
+        return section if isinstance(section, dict) else {}
+
+    def _set_string_var(self, variable: tk.StringVar, value: object, default: str) -> None:
+        variable.set(default if value is None else str(value))
+
+    def _config_int(self, value: object) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _raw_current_config(self, mode: str) -> dict[str, str]:
+        if mode == MODE_SERIAL:
+            return {
+                "port": self.port_var.get().strip(),
+                "baud": self.baud_var.get().strip(),
+                "data_bits": self.data_bits_var.get().strip(),
+                "parity": self.parity_var.get().strip(),
+                "stop_bits": self.stop_bits_var.get().strip(),
+                "flow": self.flow_var.get().strip(),
+                "dtr": "1" if self.dtr_var.get() else "0",
+                "rts": "1" if self.rts_var.get() else "0",
+            }
+        if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT):
+            return {
+                "remote_host": self.remote_host_var.get().strip(),
+                "remote_port": self.remote_port_var.get().strip(),
+                "local_host": "0.0.0.0",
+                "local_port": "0",
+            }
+        return {
+            "remote_host": "",
+            "remote_port": "",
+            "local_host": "0.0.0.0",
+            "local_port": self.local_port_var.get().strip() or "0",
+        }
+
+    def _sync_active_session_from_controls(self) -> None:
+        session = self.active_session
+        if session is None:
+            return
+        config = self._raw_current_config(session.mode)
+        session.config = config
+        base_name = self._session_label(session.mode, config)
+        if base_name:
+            session.name = self._unique_session_name_for_session(session, base_name)
+            self._update_session_tree_status(session)
+            if hasattr(self, "notebook"):
+                self.notebook.tab(0, text=session.name)
+
+    def import_config(self) -> None:
+        path = filedialog.askopenfilename(
+            title="导入配置",
+            filetypes=(("JSON配置文件", "*.json"), ("所有文件", "*.*")),
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("配置文件格式错误")
+            for session in list(self.sessions.values()):
+                if session.is_connected:
+                    self.disconnect_session(session)
+            self._cancel_scheduled_config_save()
+            self._apply_config(data)
+            self._save_config_now()
+            self.status_var.set(f"已导入配置: {path}")
+        except Exception as exc:
+            messagebox.showerror("导入配置失败", str(exc))
+            self.status_var.set("导入配置失败")
+
+    def export_config(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="导出配置",
+            defaultextension=".json",
+            filetypes=(("JSON配置文件", "*.json"), ("所有文件", "*.*")),
+            initialfile="config.json",
+        )
+        if not path:
+            return
+        try:
+            self._sync_active_session_from_controls()
+            data = self._collect_config()
+            Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.status_var.set(f"已导出配置: {path}")
+        except Exception as exc:
+            messagebox.showerror("导出配置失败", str(exc))
+            self.status_var.set("导出配置失败")
+
+    def clear_config(self) -> None:
+        if not messagebox.askyesno("清除配置", "确定要清除已保存配置并恢复默认设置吗？"):
+            return
+        for session in list(self.sessions.values()):
+            if session.is_connected:
+                self.disconnect_session(session)
+        self._cancel_scheduled_config_save()
+        self._apply_config(self._default_config())
+        try:
+            if self.config_path.exists():
+                self.config_path.unlink()
+            self.status_var.set("已清除配置")
+        except Exception as exc:
+            messagebox.showerror("清除配置失败", str(exc))
+            self.status_var.set("清除配置失败")
+
     def refresh_ports(self) -> None:
         self._refresh_serial_ports()
         self._rebuild_connection_tree()
@@ -798,6 +1245,7 @@ class SerialDebugTool(tk.Tk):
                 self._on_mode_change()
                 self._update_counts()
                 self._set_connected_state(False)
+                self._schedule_config_save()
                 return
 
         session = self._session_by_tree_id(selected_id)
@@ -810,17 +1258,20 @@ class SerialDebugTool(tk.Tk):
             self._update_counts()
             self.notebook.tab(0, text=session.name)
             self.status_var.set(f"当前连接：{session.name}")
+            self._schedule_config_save()
             return
 
         if text in NETWORK_MODES:
             self.mode_var.set(text)
             self._on_mode_change()
+            self._schedule_config_save()
             return
         match = re.match(r"(COM\d+)", text, flags=re.IGNORECASE)
         if match:
             self.mode_var.set(MODE_SERIAL)
             self._on_mode_change()
             self.port_var.set(match.group(1).upper())
+            self._schedule_config_save()
 
     def _show_connection_context_menu(self, event: tk.Event) -> None:
         tree_id = self.port_tree.identify_row(event.y)
@@ -886,6 +1337,7 @@ class SerialDebugTool(tk.Tk):
         self._set_connected_state(False)
         self._update_counts()
         self.status_var.set(f"已创建连接：{session.name}")
+        self._schedule_config_save()
         return session
 
     def _new_session(self, mode: str, config: dict[str, str]) -> ConnectionSession:
@@ -915,45 +1367,30 @@ class SerialDebugTool(tk.Tk):
         self._set_connected_state(False)
         self.notebook.tab(0, text="串口会话")
         self.status_var.set(f"已删除连接：{session.name}")
+        self._schedule_config_save()
 
     def _capture_current_config(self, mode: str) -> dict[str, str]:
         if mode == MODE_SERIAL:
-            port_name = self.port_var.get().strip()
+            config = self._raw_current_config(mode)
+            port_name = config.get("port", "")
             if not port_name:
                 raise ValueError("请先选择或输入 COM 口，例如 COM3。")
-            return {
-                "port": port_name,
-                "baud": self.baud_var.get().strip(),
-                "data_bits": self.data_bits_var.get().strip(),
-                "parity": self.parity_var.get().strip(),
-                "stop_bits": self.stop_bits_var.get().strip(),
-                "flow": self.flow_var.get().strip(),
-                "dtr": "1" if self.dtr_var.get() else "0",
-                "rts": "1" if self.rts_var.get() else "0",
-            }
+            return config
 
         if mode in (MODE_TCP_CLIENT, MODE_UDP_CLIENT):
-            remote_host = self.remote_host_var.get().strip()
-            remote_port = self.remote_port_var.get().strip()
+            config = self._raw_current_config(mode)
+            remote_host = config.get("remote_host", "")
+            remote_port = config.get("remote_port", "")
             if not remote_host:
                 raise ValueError("目标IP不能为空")
             if parse_port(remote_port, "目标端口") == 0:
                 raise ValueError("目标端口不能为 0")
-            return {
-                "remote_host": remote_host,
-                "remote_port": remote_port,
-                "local_host": "0.0.0.0",
-                "local_port": "0",
-            }
+            return config
         elif mode in (MODE_TCP_SERVER, MODE_UDP_SERVER):
-            local_port = self.local_port_var.get().strip() or "0"
+            config = self._raw_current_config(mode)
+            local_port = config.get("local_port", "0")
             parse_port(local_port, "本地端口")
-            return {
-                "remote_host": "",
-                "remote_port": "",
-                "local_host": "0.0.0.0",
-                "local_port": local_port,
-            }
+            return config
         else:
             raise ValueError("未知连接类型")
 
@@ -1024,6 +1461,7 @@ class SerialDebugTool(tk.Tk):
             session.config = self._capture_current_config(session.mode)
             session.name = self._unique_session_name_for_session(session, self._session_label(session.mode, session.config))
             self._update_session_tree_status(session)
+            self._schedule_config_save()
         except Exception as exc:
             messagebox.showerror("连接参数错误", str(exc))
             return
@@ -1734,6 +2172,9 @@ class SerialDebugTool(tk.Tk):
         )
 
     def on_close(self) -> None:
+        if self._config_save_after_id is not None:
+            self.after_cancel(self._config_save_after_id)
+            self._save_config_now()
         for session in list(self.sessions.values()):
             if session.is_connected:
                 self.disconnect_session(session)

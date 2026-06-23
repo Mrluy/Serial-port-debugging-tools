@@ -3,7 +3,9 @@ import unittest
 from main import (
     APP_VERSION,
     append_crc16_modbus_if_missing,
+    app_config_path,
     calculate_crc16_modbus,
+    config_bool,
     parse_hex_payload,
     parse_port,
 )
@@ -46,6 +48,20 @@ class VersionTests(unittest.TestCase):
         parts = APP_VERSION.split(".")
         self.assertEqual(len(parts), 3)
         self.assertTrue(all(part.isdigit() for part in parts))
+
+
+class ConfigTests(unittest.TestCase):
+    def test_app_config_path_uses_appdata_directory(self) -> None:
+        self.assertEqual(
+            str(app_config_path(r"C:\Users\Tester\AppData\Roaming")),
+            r"C:\Users\Tester\AppData\Roaming\Serial-port-debugging-tools\config.json",
+        )
+
+    def test_config_bool_accepts_common_string_values(self) -> None:
+        self.assertTrue(config_bool("true"))
+        self.assertTrue(config_bool("1"))
+        self.assertFalse(config_bool("false", True))
+        self.assertFalse(config_bool("0", True))
 
 
 if __name__ == "__main__":
