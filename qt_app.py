@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import queue
 import re
@@ -125,33 +126,28 @@ class TickCheckBox(QCheckBox):
 
 
 class SelectableLogEdit(QTextEdit):
+    HEADERS = ("发送时间", "发送内容", "接收时间", "连接", "接收数据")
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.records: list[tuple[str, str, str, str, str]] = []
         self.setReadOnly(True)
-        self.setAcceptRichText(False)
+        self.setAcceptRichText(True)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        self.setPlaceholderText("暂无数据")
         data_font = QFont("Consolas")
         data_font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(data_font)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_copy_menu)
+        self._render()
 
     def append_record(self, sent_timestamp: str, sent_data: str, recv_timestamp: str, connection: str, data: str) -> None:
-        line = (
-            f"发送时间: {sent_timestamp or '-'}    "
-            f"发送内容: {sent_data or '-'}    "
-            f"接收时间: {recv_timestamp or '-'}    "
-            f"连接: {connection or '-'}    "
-            f"接收数据: {data}"
-        )
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        if self.toPlainText():
-            cursor.insertText("\n")
-        cursor.insertText(line)
-        self.setTextCursor(cursor)
-        self.ensureCursorVisible()
+        self.records.append((sent_timestamp, sent_data, recv_timestamp, connection, data))
+        self._render(scroll_to_bottom=True)
+
+    def clear(self) -> None:  # type: ignore[override]
+        self.records.clear()
+        self._render()
 
     def _show_copy_menu(self, point: QPoint) -> None:
         if not self.textCursor().hasSelection():
@@ -161,7 +157,83 @@ class SelectableLogEdit(QTextEdit):
         menu.exec(self.viewport().mapToGlobal(point))
 
     def to_log_text(self) -> str:
-        return self.toPlainText()
+        lines = ["\t".join(self.HEADERS)]
+        lines.extend("\t".join(record).rstrip() for record in self.records)
+        return "\n".join(lines)
+
+    def _render(self, *, scroll_to_bottom: bool = False) -> None:
+        header_html = "".join(f"<th>{self._cell_text(title)}</th>" for title in self.HEADERS)
+        if self.records:
+            rows_html = "\n".join(
+                "<tr>" + "".join(f"<td>{self._cell_text(value)}</td>" for value in record) + "</tr>"
+                for record in self.records
+            )
+        else:
+            rows_html = '<tr><td class="empty" colspan="5">暂无数据</td></tr>'
+        self.setHtml(
+            f"""
+            <!doctype html>
+            <html>
+            <head>
+            <style>
+            body {{
+                margin: 0;
+                background: {THEME["table"]};
+                color: {THEME["text"]};
+                font-family: "Microsoft YaHei UI", "Segoe UI", Consolas, monospace;
+                font-size: 13px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                table-layout: fixed;
+            }}
+            th {{
+                background: {THEME["table_header"]};
+                color: {THEME["text"]};
+                font-weight: 600;
+                padding: 5px 6px;
+                border-right: 1px solid {THEME["border_soft"]};
+                border-bottom: 1px solid {THEME["border_soft"]};
+                white-space: nowrap;
+            }}
+            td {{
+                color: {THEME["text"]};
+                padding: 4px 6px;
+                border-right: 1px solid {THEME["border_soft"]};
+                border-bottom: 1px solid {THEME["border_soft"]};
+                vertical-align: top;
+                white-space: pre-wrap;
+            }}
+            th:nth-child(1), td:nth-child(1) {{ width: 108px; }}
+            th:nth-child(2), td:nth-child(2) {{ width: 240px; }}
+            th:nth-child(3), td:nth-child(3) {{ width: 108px; }}
+            th:nth-child(4), td:nth-child(4) {{ width: 170px; }}
+            td.empty {{
+                color: {THEME["disabled"]};
+                text-align: center;
+                padding: 70px 0;
+                border-right: 0;
+            }}
+            </style>
+            </head>
+            <body>
+            <table>
+                <thead><tr>{header_html}</tr></thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+            </body>
+            </html>
+            """
+        )
+        if scroll_to_bottom:
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.setTextCursor(cursor)
+            self.ensureCursorVisible()
+
+    def _cell_text(self, value: str) -> str:
+        return html.escape(value).replace("\n", "<br>")
 
 
 class SerialDebugQtTool(QMainWindow):
