@@ -327,11 +327,6 @@ class SerialDebugQtTool(QMainWindow):
             background: {THEME["header"]};
             border-bottom: 1px solid {THEME["border_soft"]};
         }}
-        QLabel#AppTitle {{
-            font-size: 17px;
-            font-weight: 600;
-            letter-spacing: 0;
-        }}
         QLabel#SectionTitle {{
             font-size: 14px;
             font-weight: 700;
@@ -579,25 +574,8 @@ class SerialDebugQtTool(QMainWindow):
         header = QWidget()
         header.setObjectName("Header")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(18, 8, 18, 8)
-        layout.setSpacing(14)
-
-        icon_label = QLabel()
-        icon_path = resource_path(APP_ICON_PATH)
-        if icon_path.exists():
-            icon_label.setPixmap(
-                QPixmap(str(icon_path)).scaled(
-                    24,
-                    24,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
-        layout.addWidget(icon_label)
-
-        title = QLabel(APP_TITLE)
-        title.setObjectName("AppTitle")
-        layout.addWidget(title)
+        layout.setContentsMargins(8, 3, 8, 3)
+        layout.setSpacing(0)
 
         menu_bar = QMenuBar()
         menu_bar.addMenu(self._make_action_menu())

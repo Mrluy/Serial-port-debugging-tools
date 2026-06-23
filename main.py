@@ -26,7 +26,7 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 CONFIG_DIR_NAME = "Serial-port-debugging-tools"
