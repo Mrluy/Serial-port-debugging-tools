@@ -26,7 +26,7 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.1.11"
+APP_VERSION = "1.1.12"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 CONFIG_DIR_NAME = "Serial-port-debugging-tools"
@@ -168,6 +168,10 @@ class ConnectionSession:
     recv_bytes: int = 0
     sent_last: int = 0
     recv_last: int = 0
+    tab_open: bool = False
+    send_text: str = ""
+    send_file_path: str = ""
+    receive_records: list[tuple[str, str, str, str, str]] = field(default_factory=list)
 
     @property
     def is_connected(self) -> bool:

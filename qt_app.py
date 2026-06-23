@@ -145,6 +145,13 @@ class SelectableLogEdit(QTextEdit):
         self.records.append((sent_timestamp, sent_data, recv_timestamp, connection, data))
         self._render(scroll_to_bottom=True)
 
+    def set_records(self, records: list[tuple[str, str, str, str, str]]) -> None:
+        self.records = list(records)
+        self._render()
+
+    def record_snapshot(self) -> list[tuple[str, str, str, str, str]]:
+        return list(self.records)
+
     def clear(self) -> None:  # type: ignore[override]
         self.records.clear()
         self._render()
@@ -254,6 +261,7 @@ class SerialDebugQtTool(QMainWindow):
         self.rx_queue: queue.Queue[tuple[str, int, bytes | str]] = queue.Queue()
         self.config_path = app_config_path()
         self._loading_config = True
+        self._switching_session = False
         self._syncing_session_tabs = False
 
         self.sent_last = 0
@@ -1060,7 +1068,7 @@ class SerialDebugQtTool(QMainWindow):
         self.rts_check.toggled.connect(lambda _checked: self._apply_line_state())
 
     def _on_config_changed(self, *_args: object) -> None:
-        if self._loading_config:
+        if self._loading_config or self._switching_session:
             return
         self._sync_active_session_from_controls()
         self._schedule_config_save()
@@ -1307,13 +1315,14 @@ class SerialDebugQtTool(QMainWindow):
             while self.session_tabs.count():
                 self.session_tabs.removeTab(0)
             active_index = -1
-            for session in sorted(self.sessions.values(), key=lambda item: item.id):
+            visible_sessions = [session for session in sorted(self.sessions.values(), key=lambda item: item.id) if session.tab_open]
+            for session in visible_sessions:
                 index = self.session_tabs.addTab(session.name)
                 self.session_tabs.setTabData(index, session.id)
                 self.session_tabs.setTabToolTip(index, session.name)
                 if session.id == self.active_session_id:
                     active_index = index
-            self.session_tabs.setVisible(bool(self.sessions))
+            self.session_tabs.setVisible(bool(visible_sessions))
             if active_index >= 0:
                 self.session_tabs.setCurrentIndex(active_index)
         finally:
@@ -1321,6 +1330,9 @@ class SerialDebugQtTool(QMainWindow):
 
     def _update_session_tab(self, session: ConnectionSession) -> None:
         if not hasattr(self, "session_tabs"):
+            return
+        if not session.tab_open:
+            self._refresh_session_tabs()
             return
         for index in range(self.session_tabs.count()):
             if self.session_tabs.tabData(index) == session.id:
@@ -1341,9 +1353,22 @@ class SerialDebugQtTool(QMainWindow):
         session_id = self.session_tabs.tabData(index)
         session = self.sessions.get(int(session_id)) if session_id is not None else None
         if session is not None:
-            self._remove_session(session)
-            self._set_status(f"已关闭标签：{session.name}")
+            if session.is_connected:
+                self.disconnect_session(session)
+            session.tab_open = False
+            was_active = self.active_session_id == session.id
+            self._refresh_session_tabs()
+            if was_active:
+                replacement = self._first_tab_session()
+                if replacement is not None:
+                    self._select_session(replacement)
+                else:
+                    self._select_session(session)
+            self._set_status(f"已断开：{session.name}")
             self._schedule_config_save()
+
+    def _first_tab_session(self) -> ConnectionSession | None:
+        return next((session for session in sorted(self.sessions.values(), key=lambda item: item.id) if session.tab_open), None)
 
     def _session_status_icon(self, session: ConnectionSession) -> QIcon:
         return self.status_icons["connected" if session.is_connected else "session_idle"]
@@ -1356,12 +1381,14 @@ class SerialDebugQtTool(QMainWindow):
         if not isinstance(data, dict):
             return
         if data.get("kind") == "mode":
+            self._save_active_work_area()
             self.active_session_id = None
             self.mode = str(data.get("mode", MODE_SERIAL))
             self._apply_mode_defaults()
             self._update_mode_controls()
             self._set_connected_state(False)
             self._update_counts()
+            self._clear_work_area()
             self._set_status("")
             self._schedule_config_save()
             return
@@ -1521,9 +1548,16 @@ class SerialDebugQtTool(QMainWindow):
         return session
 
     def _select_session(self, session: ConnectionSession, *, sync_tabs: bool = True) -> None:
+        if self.active_session_id != session.id:
+            self._save_active_work_area()
         self.active_session_id = session.id
         self.mode = session.mode
-        self._load_session_config(session)
+        self._switching_session = True
+        try:
+            self._load_session_config(session)
+            self._load_session_work_area(session)
+        finally:
+            self._switching_session = False
         item = self.session_items.get(session.id)
         if item is not None:
             was_blocked = self.connection_tree.blockSignals(True)
@@ -1534,6 +1568,38 @@ class SerialDebugQtTool(QMainWindow):
         self._update_mode_controls()
         self._set_connected_state(session.is_connected)
         self._update_counts()
+
+    def _save_active_work_area(self) -> None:
+        if not hasattr(self, "send_edit") or not hasattr(self, "receive_log"):
+            return
+        session = self.active_session
+        if session is None:
+            return
+        session.send_text = self.send_edit.toPlainText()
+        session.send_file_path = self.send_file_edit.text()
+        session.receive_records = self.receive_log.record_snapshot()
+
+    def _load_session_work_area(self, session: ConnectionSession) -> None:
+        if not hasattr(self, "send_edit") or not hasattr(self, "receive_log"):
+            return
+        was_send_file_blocked = self.send_file_edit.blockSignals(True)
+        try:
+            self.send_edit.setPlainText(session.send_text)
+            self.send_file_edit.setText(session.send_file_path)
+            self.receive_log.set_records(session.receive_records)
+        finally:
+            self.send_file_edit.blockSignals(was_send_file_blocked)
+
+    def _clear_work_area(self) -> None:
+        if not hasattr(self, "send_edit") or not hasattr(self, "receive_log"):
+            return
+        was_send_file_blocked = self.send_file_edit.blockSignals(True)
+        try:
+            self.send_edit.clear()
+            self.send_file_edit.clear()
+            self.receive_log.set_records([])
+        finally:
+            self.send_file_edit.blockSignals(was_send_file_blocked)
 
     def delete_current_connection(self) -> None:
         session = self.active_session
@@ -1699,9 +1765,10 @@ class SerialDebugQtTool(QMainWindow):
         session.threads.append(thread)
         thread.start()
         session.name = self._unique_session_name_for_session(session, port_name)
+        session.tab_open = True
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
-        self._update_session_tab(session)
+        self._refresh_session_tabs()
         self._set_status("")
         self._on_auto_send_toggle()
 
@@ -1763,9 +1830,10 @@ class SerialDebugQtTool(QMainWindow):
             self._set_status(f"打开 {mode} 失败")
             return
         session.name = self._unique_session_name_for_session(session, label)
+        session.tab_open = True
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
-        self._update_session_tab(session)
+        self._refresh_session_tabs()
         self._set_status("")
         self._on_auto_send_toggle()
 
@@ -1973,14 +2041,14 @@ class SerialDebugQtTool(QMainWindow):
         recv_timestamp = self._log_timestamp()
         sent_timestamp, sent_data = self._take_pending_send_record(session)
         if not self.pause_display_check.isChecked():
-            self._append_receive_record(sent_timestamp, sent_data, recv_timestamp, session.name, display)
+            self._append_receive_record(session, sent_timestamp, sent_data, recv_timestamp, display)
         if self.realtime_save_check.isChecked():
             self._append_realtime_file(self._format_record_for_file(sent_timestamp, sent_data, recv_timestamp, session.name, display))
 
     def _append_system_message(self, session: ConnectionSession, text: str) -> None:
         timestamp = self._log_timestamp()
         if not self.pause_display_check.isChecked():
-            self._append_receive_record("", "", timestamp, session.name, text)
+            self._append_receive_record(session, "", "", timestamp, text)
         if self.realtime_save_check.isChecked():
             self._append_realtime_file(self._format_record_for_file("", "", timestamp, session.name, text))
 
@@ -1996,8 +2064,11 @@ class SerialDebugQtTool(QMainWindow):
             return "", ""
         return records.popleft()
 
-    def _append_receive_record(self, sent_timestamp: str, sent_data: str, recv_timestamp: str, connection: str, data: str) -> None:
-        self.receive_log.append_record(sent_timestamp, sent_data, recv_timestamp, connection, data)
+    def _append_receive_record(self, session: ConnectionSession, sent_timestamp: str, sent_data: str, recv_timestamp: str, data: str) -> None:
+        record = (sent_timestamp, sent_data, recv_timestamp, session.name, data)
+        session.receive_records.append(record)
+        if session.id == self.active_session_id:
+            self.receive_log.append_record(*record)
 
     def _format_sent_data(self, data: bytes) -> str:
         if self.hex_send_check.isChecked():
@@ -2185,8 +2256,14 @@ class SerialDebugQtTool(QMainWindow):
 
     def clear_send(self) -> None:
         self.send_edit.clear()
+        session = self.active_session
+        if session is not None:
+            session.send_text = ""
 
     def clear_receive(self) -> None:
+        session = self.active_session
+        if session is not None:
+            session.receive_records.clear()
         self.receive_log.clear()
 
     def clear_counts(self) -> None:
