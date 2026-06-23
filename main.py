@@ -55,6 +55,8 @@ PARITY_OPTIONS = {
 }
 FLOW_OPTIONS = ("无", "RTS/CTS", "XON/XOFF", "DSR/DTR")
 ENCODINGS = ("utf-8", "gbk", "ascii", "latin-1")
+CRC_ALGORITHM_MODBUS = "CRC16-Modbus"
+CRC_ALGORITHMS = (CRC_ALGORITHM_MODBUS,)
 
 
 def parse_hex_payload(text: str) -> bytes:
@@ -81,6 +83,30 @@ def resource_path(relative_path: Path) -> Path:
 
 def bytes_to_hex(data: bytes) -> str:
     return " ".join(f"{value:02X}" for value in data)
+
+
+def calculate_crc16_modbus(data: bytes) -> int:
+    crc = 0xFFFF
+    for value in data:
+        crc ^= value
+        for _bit in range(8):
+            if crc & 0x0001:
+                crc = (crc >> 1) ^ 0xA001
+            else:
+                crc >>= 1
+    return crc & 0xFFFF
+
+
+def crc16_modbus_bytes(data: bytes) -> bytes:
+    return calculate_crc16_modbus(data).to_bytes(2, "little")
+
+
+def append_crc16_modbus_if_missing(data: bytes) -> tuple[bytes, bool]:
+    if not data:
+        return data, False
+    if len(data) >= 3 and data[-2:] == crc16_modbus_bytes(data[:-2]):
+        return data, False
+    return data + crc16_modbus_bytes(data), True
 
 
 def parse_port(value: str, field_name: str) -> int:
@@ -312,6 +338,8 @@ class SerialDebugTool(tk.Tk):
         self.hex_send_var = tk.BooleanVar(value=False)
         self.hex_recv_var = tk.BooleanVar(value=False)
         self.send_newline_var = tk.BooleanVar(value=False)
+        self.auto_crc_var = tk.BooleanVar(value=False)
+        self.crc_algorithm_var = tk.StringVar(value=CRC_ALGORITHM_MODBUS)
         self.auto_send_var = tk.BooleanVar(value=False)
         self.interval_var = tk.StringVar(value="1000")
         self.send_file_var = tk.BooleanVar(value=False)
@@ -606,7 +634,7 @@ class SerialDebugTool(tk.Tk):
     def _build_send_area(self, parent: ttk.Frame) -> None:
         send_toolbar = ttk.Frame(parent)
         send_toolbar.grid(row=0, column=0, sticky=tk.EW)
-        send_toolbar.columnconfigure(12, weight=1)
+        send_toolbar.columnconfigure(14, weight=1)
 
         ttk.Label(send_toolbar, text="发送区").grid(row=0, column=0, padx=(0, 8))
         ttk.Checkbutton(send_toolbar, text="16进制", variable=self.hex_send_var).grid(row=0, column=1, padx=2)
@@ -615,22 +643,36 @@ class SerialDebugTool(tk.Tk):
         )
         ttk.Checkbutton(
             send_toolbar,
+            text="自动CRC",
+            variable=self.auto_crc_var,
+            command=self._toggle_crc_controls,
+        ).grid(row=0, column=3, padx=2)
+        self.crc_combo = ttk.Combobox(
+            send_toolbar,
+            textvariable=self.crc_algorithm_var,
+            values=CRC_ALGORITHMS,
+            width=13,
+            state="readonly",
+        )
+        self.crc_combo.grid(row=0, column=4, padx=(0, 8))
+        ttk.Checkbutton(
+            send_toolbar,
             text="发送文件",
             variable=self.send_file_var,
             command=self._toggle_file_send_controls,
-        ).grid(row=0, column=3, padx=2)
+        ).grid(row=0, column=5, padx=2)
         ttk.Checkbutton(
             send_toolbar,
             text="自动发送",
             variable=self.auto_send_var,
             command=self._on_auto_send_toggle,
-        ).grid(row=0, column=4, padx=2)
-        ttk.Label(send_toolbar, text="间隔").grid(row=0, column=5, padx=(8, 2))
-        ttk.Entry(send_toolbar, textvariable=self.interval_var, width=7).grid(row=0, column=6)
-        ttk.Label(send_toolbar, text="ms").grid(row=0, column=7, padx=(2, 8))
-        ttk.Button(send_toolbar, text="发送", command=self.send_now, width=8).grid(row=0, column=8, padx=2)
-        ttk.Button(send_toolbar, text="停止", command=self.stop_auto_send, width=8).grid(row=0, column=9, padx=2)
-        ttk.Button(send_toolbar, text="清空", command=self.clear_send, width=8).grid(row=0, column=10, padx=2)
+        ).grid(row=0, column=6, padx=2)
+        ttk.Label(send_toolbar, text="间隔").grid(row=0, column=7, padx=(8, 2))
+        ttk.Entry(send_toolbar, textvariable=self.interval_var, width=7).grid(row=0, column=8)
+        ttk.Label(send_toolbar, text="ms").grid(row=0, column=9, padx=(2, 8))
+        ttk.Button(send_toolbar, text="发送", command=self.send_now, width=8).grid(row=0, column=10, padx=2)
+        ttk.Button(send_toolbar, text="停止", command=self.stop_auto_send, width=8).grid(row=0, column=11, padx=2)
+        ttk.Button(send_toolbar, text="清空", command=self.clear_send, width=8).grid(row=0, column=12, padx=2)
 
         file_bar = ttk.Frame(parent)
         file_bar.grid(row=1, column=0, sticky=tk.EW, pady=(5, 4))
@@ -645,6 +687,7 @@ class SerialDebugTool(tk.Tk):
         self.send_text.grid(row=2, column=0, sticky=tk.NSEW, pady=(4, 0))
 
         self._toggle_file_send_controls()
+        self._toggle_crc_controls()
 
     def _build_receive_area(self, parent: ttk.Frame) -> None:
         receive_toolbar = ttk.Frame(parent)
@@ -1427,7 +1470,7 @@ class SerialDebugTool(tk.Tk):
             return
 
         try:
-            data = self._build_send_payload()
+            data, crc_appended = self._build_send_payload()
         except Exception as exc:
             if not silent:
                 messagebox.showerror("发送内容错误", str(exc))
@@ -1443,7 +1486,8 @@ class SerialDebugTool(tk.Tk):
             written, target_text = self._write_payload(session, data)
             session.sent_bytes += written
             self._update_counts()
-            self.status_var.set(f"已发送 {written} 字节{target_text}")
+            crc_text = "，已自动追加CRC" if crc_appended else ""
+            self.status_var.set(f"已发送 {written} 字节{target_text}{crc_text}")
         except Exception as exc:
             if not silent:
                 messagebox.showerror("发送失败", str(exc))
@@ -1504,7 +1548,7 @@ class SerialDebugTool(tk.Tk):
             except Exception:
                 pass
 
-    def _build_send_payload(self) -> bytes:
+    def _build_send_payload(self) -> tuple[bytes, bool]:
         if self.send_file_var.get():
             path_text = self.send_file_path_var.get().strip()
             if not path_text:
@@ -1512,16 +1556,27 @@ class SerialDebugTool(tk.Tk):
             path = Path(path_text)
             if not path.is_file():
                 raise ValueError("发送文件不存在")
-            return path.read_bytes()
+            data = path.read_bytes()
+        else:
+            text = self.send_text.get("1.0", "end-1c")
+            if self.hex_send_var.get():
+                data = parse_hex_payload(text)
+            else:
+                if self.send_newline_var.get():
+                    text += "\r\n"
+                encoding = self.encoding_var.get() or "utf-8"
+                data = text.encode(encoding, errors="replace")
 
-        text = self.send_text.get("1.0", "end-1c")
-        if self.hex_send_var.get():
-            return parse_hex_payload(text)
+        return self._apply_auto_crc(data)
 
-        if self.send_newline_var.get():
-            text += "\r\n"
-        encoding = self.encoding_var.get() or "utf-8"
-        return text.encode(encoding, errors="replace")
+    def _apply_auto_crc(self, data: bytes) -> tuple[bytes, bool]:
+        if not self.auto_crc_var.get() or not data:
+            return data, False
+
+        algorithm = self.crc_algorithm_var.get() or CRC_ALGORITHM_MODBUS
+        if algorithm != CRC_ALGORITHM_MODBUS:
+            raise ValueError(f"暂不支持 CRC 算法: {algorithm}")
+        return append_crc16_modbus_if_missing(data)
 
     def _on_auto_send_toggle(self) -> None:
         if self.auto_send_var.get() and self.is_connected:
@@ -1558,6 +1613,11 @@ class SerialDebugTool(tk.Tk):
         state = tk.NORMAL if self.send_file_var.get() else tk.DISABLED
         self.send_file_entry.configure(state=state)
         self.send_file_btn.configure(state=state)
+
+    def _toggle_crc_controls(self) -> None:
+        if hasattr(self, "crc_combo"):
+            state = "readonly" if self.auto_crc_var.get() else tk.DISABLED
+            self.crc_combo.configure(state=state)
 
     def choose_send_file(self) -> None:
         path = filedialog.askopenfilename(title="选择要发送的文件")
