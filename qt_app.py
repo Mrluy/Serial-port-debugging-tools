@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -33,9 +32,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStyle,
     QStyleOptionButton,
-    QTabWidget,
-    QTableWidget,
-    QTableWidgetItem,
+    QTabBar,
     QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
@@ -127,77 +124,44 @@ class TickCheckBox(QCheckBox):
         painter.end()
 
 
-class EmptyTable(QTableWidget):
-    def __init__(
-        self,
-        headers: tuple[str, ...] = ("时间", "连接", "数据"),
-        fixed_widths: tuple[int, ...] = (132, 176),
-        mono_columns: tuple[int, ...] = (2,),
-        empty_text: str = "暂无数据",
-        parent: QWidget | None = None,
-    ) -> None:
+class SelectableLogEdit(QTextEdit):
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.default_row_height = 20
-        self.mono_columns = set(mono_columns)
-        self.empty_text = empty_text
-        self.data_font = QFont("Consolas")
-        self.data_font.setStyleHint(QFont.StyleHint.Monospace)
-        self.setColumnCount(len(headers))
-        self.setHorizontalHeaderLabels(headers)
-        self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(self.default_row_height)
-        self.setShowGrid(False)
-        self.setAlternatingRowColors(False)
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.setWordWrap(True)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        header = self.horizontalHeader()
-        stretch_col = max(0, len(headers) - 1)
-        for col, width in enumerate(fixed_widths):
-            if col >= len(headers):
-                break
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
-            self.setColumnWidth(col, width)
-        for col in range(len(fixed_widths), len(headers)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == stretch_col else QHeaderView.ResizeMode.Fixed)
+        self.setReadOnly(True)
+        self.setAcceptRichText(False)
+        self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.setPlaceholderText("暂无数据")
+        data_font = QFont("Consolas")
+        data_font.setStyleHint(QFont.StyleHint.Monospace)
+        self.setFont(data_font)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._show_context_menu)
+        self.customContextMenuRequested.connect(self._show_copy_menu)
 
-    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        super().paintEvent(event)
-        if self.rowCount():
+    def append_record(self, sent_timestamp: str, sent_data: str, recv_timestamp: str, connection: str, data: str) -> None:
+        line = (
+            f"发送时间: {sent_timestamp or '-'}    "
+            f"发送内容: {sent_data or '-'}    "
+            f"接收时间: {recv_timestamp or '-'}    "
+            f"连接: {connection or '-'}    "
+            f"接收数据: {data}"
+        )
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if self.toPlainText():
+            cursor.insertText("\n")
+        cursor.insertText(line)
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def _show_copy_menu(self, point: QPoint) -> None:
+        if not self.textCursor().hasSelection():
             return
-        painter = QPainter(self.viewport())
-        painter.setPen(QColor(THEME["disabled"]))
-        painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
-
-    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        if event.matches(QKeySequence.StandardKey.Copy):
-            self.copy_selection()
-            return
-        super().keyPressEvent(event)
-
-    def _show_context_menu(self, point: QPoint) -> None:
         menu = QMenu(self)
-        copy_action = menu.addAction("复制")
-        copy_action.triggered.connect(self.copy_selection)
+        menu.addAction("复制", self.copy)
         menu.exec(self.viewport().mapToGlobal(point))
 
-    def copy_selection(self) -> None:
-        ranges = self.selectedRanges()
-        if not ranges:
-            return
-        lines: list[str] = []
-        for selected_range in ranges:
-            for row in range(selected_range.topRow(), selected_range.bottomRow() + 1):
-                values = []
-                for col in range(selected_range.leftColumn(), selected_range.rightColumn() + 1):
-                    item = self.item(row, col)
-                    values.append(item.text() if item is not None else "")
-                lines.append("\t".join(values))
-        QApplication.clipboard().setText("\n".join(lines))
+    def to_log_text(self) -> str:
+        return self.toPlainText()
 
 
 class SerialDebugQtTool(QMainWindow):
@@ -218,6 +182,7 @@ class SerialDebugQtTool(QMainWindow):
         self.rx_queue: queue.Queue[tuple[str, int, bytes | str]] = queue.Queue()
         self.config_path = app_config_path()
         self._loading_config = True
+        self._syncing_session_tabs = False
 
         self.sent_last = 0
         self.recv_last = 0
@@ -465,7 +430,7 @@ class SerialDebugQtTool(QMainWindow):
             background: {THEME["accent"]};
             border-color: {THEME["accent"]};
         }}
-        QTreeWidget, QTableWidget {{
+        QTreeWidget {{
             background: {THEME["table"]};
             color: {THEME["text"]};
             border: 1px solid {THEME["border"]};
@@ -488,27 +453,8 @@ class SerialDebugQtTool(QMainWindow):
         QTreeWidget::item:hover:!selected {{
             background: {THEME["accent_faint"]};
         }}
-        QHeaderView::section {{
-            background: {THEME["table_header"]};
-            color: {THEME["text"]};
-            border: 0;
-            border-right: 1px solid {THEME["border_soft"]};
-            padding: 5px 6px;
-            font-weight: 600;
-        }}
-        QTableWidget::item {{
-            border: 0;
-            padding: 1px 4px;
-        }}
-        QTableWidget::item:selected {{
-            background: {THEME["accent_soft"]};
-            color: white;
-        }}
-        QTabWidget::pane {{
-            border: 1px solid {THEME["border"]};
-            border-radius: 7px;
-            background: {THEME["card"]};
-            top: -1px;
+        QTabBar {{
+            background: transparent;
         }}
         QTabBar::tab {{
             background: {THEME["card_alt"]};
@@ -788,8 +734,16 @@ class SerialDebugQtTool(QMainWindow):
         layout = QVBoxLayout(workspace)
         layout.setContentsMargins(8, 8, 10, 8)
         layout.setSpacing(6)
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
+
+        self.session_tabs = QTabBar()
+        self.session_tabs.setDocumentMode(True)
+        self.session_tabs.setTabsClosable(True)
+        self.session_tabs.setExpanding(False)
+        self.session_tabs.setUsesScrollButtons(True)
+        self.session_tabs.currentChanged.connect(self._on_session_tab_changed)
+        self.session_tabs.tabCloseRequested.connect(self._close_session_tab)
+        layout.addWidget(self.session_tabs)
+
         session = QWidget()
         session_layout = QVBoxLayout(session)
         session_layout.setContentsMargins(8, 8, 8, 8)
@@ -800,8 +754,7 @@ class SerialDebugQtTool(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setSizes((300, 500))
         session_layout.addWidget(splitter)
-        self.tabs.addTab(session, "串口会话")
-        layout.addWidget(self.tabs)
+        layout.addWidget(session, 1)
         return workspace
 
     def _build_send_card(self) -> QFrame:
@@ -872,6 +825,8 @@ class SerialDebugQtTool(QMainWindow):
         self.send_edit = QTextEdit()
         self.send_edit.setPlaceholderText("在此输入要发送的数据...")
         self.send_edit.setMinimumHeight(126)
+        self.send_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.send_edit.customContextMenuRequested.connect(self._show_send_context_menu)
         layout.addWidget(self.send_edit, 1)
         self._toggle_file_send_controls()
         self._toggle_crc_controls()
@@ -916,13 +871,9 @@ class SerialDebugQtTool(QMainWindow):
         realtime_row.addWidget(realtime_btn)
         layout.addLayout(realtime_row)
 
-        self.receive_table = EmptyTable(
-            headers=("发送时间", "发送内容", "接收时间", "连接", "接收数据"),
-            fixed_widths=(108, 240, 108, 170),
-            mono_columns=(1, 4),
-        )
-        self.receive_table.setMinimumHeight(200)
-        layout.addWidget(self.receive_table, 1)
+        self.receive_log = SelectableLogEdit()
+        self.receive_log.setMinimumHeight(200)
+        layout.addWidget(self.receive_log, 1)
         return card
 
     def _build_status_bar(self) -> QWidget:
@@ -969,6 +920,29 @@ class SerialDebugQtTool(QMainWindow):
         label = QLabel(text)
         label.setObjectName("SectionTitle")
         return label
+
+    def _show_send_context_menu(self, point: QPoint) -> None:
+        menu = QMenu(self.send_edit)
+        document = self.send_edit.document()
+        cursor = self.send_edit.textCursor()
+        undo_action = menu.addAction("撤销", self.send_edit.undo)
+        undo_action.setEnabled(document.isUndoAvailable())
+        redo_action = menu.addAction("恢复", self.send_edit.redo)
+        redo_action.setEnabled(document.isRedoAvailable())
+        menu.addSeparator()
+        cut_action = menu.addAction("剪切", self.send_edit.cut)
+        copy_action = menu.addAction("复制", self.send_edit.copy)
+        delete_action = menu.addAction("删除", lambda: self.send_edit.textCursor().removeSelectedText())
+        has_selection = cursor.hasSelection()
+        cut_action.setEnabled(has_selection)
+        copy_action.setEnabled(has_selection)
+        delete_action.setEnabled(has_selection)
+        paste_action = menu.addAction("粘贴", self.send_edit.paste)
+        paste_action.setEnabled(bool(QApplication.clipboard().text()))
+        menu.addSeparator()
+        select_all_action = menu.addAction("全选", self.send_edit.selectAll)
+        select_all_action.setEnabled(bool(self.send_edit.toPlainText()))
+        menu.exec(self.send_edit.viewport().mapToGlobal(point))
 
     def _bind_config_signals(self) -> None:
         widgets = (
@@ -1170,9 +1144,7 @@ class SerialDebugQtTool(QMainWindow):
                 session = self.sessions[self.active_session_id]
                 self.mode = session.mode
                 self._load_session_config(session)
-                self.tabs.setTabText(0, session.name)
-            else:
-                self.tabs.setTabText(0, "串口会话")
+            self._refresh_session_tabs()
             self._update_mode_controls()
             self._toggle_file_send_controls()
             self._toggle_crc_controls()
@@ -1253,6 +1225,53 @@ class SerialDebugQtTool(QMainWindow):
             self.session_items[session.id] = item
         if self.active_session_id in self.session_items:
             self.connection_tree.setCurrentItem(self.session_items[self.active_session_id])
+        self._refresh_session_tabs()
+
+    def _refresh_session_tabs(self) -> None:
+        if not hasattr(self, "session_tabs"):
+            return
+        self._syncing_session_tabs = True
+        try:
+            while self.session_tabs.count():
+                self.session_tabs.removeTab(0)
+            active_index = -1
+            for session in sorted(self.sessions.values(), key=lambda item: item.id):
+                index = self.session_tabs.addTab(session.name)
+                self.session_tabs.setTabData(index, session.id)
+                self.session_tabs.setTabToolTip(index, session.name)
+                if session.id == self.active_session_id:
+                    active_index = index
+            self.session_tabs.setVisible(bool(self.sessions))
+            if active_index >= 0:
+                self.session_tabs.setCurrentIndex(active_index)
+        finally:
+            self._syncing_session_tabs = False
+
+    def _update_session_tab(self, session: ConnectionSession) -> None:
+        if not hasattr(self, "session_tabs"):
+            return
+        for index in range(self.session_tabs.count()):
+            if self.session_tabs.tabData(index) == session.id:
+                self.session_tabs.setTabText(index, session.name)
+                self.session_tabs.setTabToolTip(index, session.name)
+                return
+        self._refresh_session_tabs()
+
+    def _on_session_tab_changed(self, index: int) -> None:
+        if self._syncing_session_tabs or index < 0:
+            return
+        session_id = self.session_tabs.tabData(index)
+        session = self.sessions.get(int(session_id)) if session_id is not None else None
+        if session is not None:
+            self._select_session(session, sync_tabs=False)
+
+    def _close_session_tab(self, index: int) -> None:
+        session_id = self.session_tabs.tabData(index)
+        session = self.sessions.get(int(session_id)) if session_id is not None else None
+        if session is not None:
+            self._remove_session(session)
+            self._set_status(f"已关闭标签：{session.name}")
+            self._schedule_config_save()
 
     def _session_status_icon(self, session: ConnectionSession) -> QIcon:
         return self.status_icons["connected" if session.is_connected else "session_idle"]
@@ -1277,13 +1296,7 @@ class SerialDebugQtTool(QMainWindow):
         session = self.sessions.get(int(data.get("id", -1)))
         if session is None:
             return
-        self.active_session_id = session.id
-        self.mode = session.mode
-        self._load_session_config(session)
-        self._update_mode_controls()
-        self._set_connected_state(session.is_connected)
-        self._update_counts()
-        self.tabs.setTabText(0, session.name)
+        self._select_session(session)
         self._set_status("")
         self._schedule_config_save()
 
@@ -1333,7 +1346,7 @@ class SerialDebugQtTool(QMainWindow):
         else:
             self.connect_btn.setText("关闭连接" if self.is_connected else "打开连接")
             self.connect_btn.setEnabled(self.active_session is not None)
-            self.create_btn.setEnabled(not self.is_connected)
+            self.create_btn.setEnabled(True)
         if not is_serial:
             self._update_network_rows()
 
@@ -1405,7 +1418,7 @@ class SerialDebugQtTool(QMainWindow):
         if base_name:
             session.name = self._unique_session_name_for_session(session, base_name)
             self._update_session_tree_status(session)
-            self.tabs.setTabText(0, session.name)
+            self._update_session_tab(session)
 
     def create_connection(self) -> ConnectionSession | None:
         if self.mode == MODE_SERIAL:
@@ -1435,7 +1448,7 @@ class SerialDebugQtTool(QMainWindow):
         self.active_session_id = session.id
         return session
 
-    def _select_session(self, session: ConnectionSession) -> None:
+    def _select_session(self, session: ConnectionSession, *, sync_tabs: bool = True) -> None:
         self.active_session_id = session.id
         self.mode = session.mode
         self._load_session_config(session)
@@ -1444,7 +1457,8 @@ class SerialDebugQtTool(QMainWindow):
             was_blocked = self.connection_tree.blockSignals(True)
             self.connection_tree.setCurrentItem(item)
             self.connection_tree.blockSignals(was_blocked)
-        self.tabs.setTabText(0, session.name)
+        if sync_tabs:
+            self._refresh_session_tabs()
         self._update_mode_controls()
         self._set_connected_state(session.is_connected)
         self._update_counts()
@@ -1454,17 +1468,30 @@ class SerialDebugQtTool(QMainWindow):
         if session is None:
             QMessageBox.warning(self, "未选择连接", "请先在连接列表中选择要删除的连接。")
             return
-        if session.is_connected:
-            self.disconnect_session(session)
-        self.sessions.pop(session.id, None)
-        self.pending_send_records.pop(session.id, None)
-        self.active_session_id = None
-        self._rebuild_connection_tree()
-        self._update_counts()
-        self._set_connected_state(False)
-        self.tabs.setTabText(0, "串口会话")
+        self._remove_session(session)
         self._set_status(f"已删除连接：{session.name}")
         self._schedule_config_save()
+
+    def _remove_session(self, session: ConnectionSession) -> None:
+        if session.is_connected:
+            self.disconnect_session(session)
+        was_active = self.active_session_id == session.id
+        self.sessions.pop(session.id, None)
+        self.pending_send_records.pop(session.id, None)
+        if was_active:
+            self.active_session_id = None
+        self._rebuild_connection_tree()
+        if was_active:
+            remaining = sorted(self.sessions.values(), key=lambda item: item.id)
+            if remaining:
+                self._select_session(remaining[0])
+            else:
+                self.mode = MODE_SERIAL
+                self._apply_mode_defaults()
+                self._update_mode_controls()
+                self._set_connected_state(False)
+        self._refresh_session_tabs()
+        self._update_counts()
 
     def _capture_current_config(self, mode: str) -> dict[str, str]:
         config = self._raw_current_config(mode)
@@ -1554,9 +1581,6 @@ class SerialDebugQtTool(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "连接参数错误", str(exc))
             return
-        for connected_session in self._connected_sessions():
-            if connected_session.id != session.id:
-                self.disconnect_session(connected_session)
         if session.mode == MODE_SERIAL:
             self.connect_serial(session)
         else:
@@ -1605,7 +1629,7 @@ class SerialDebugQtTool(QMainWindow):
         session.name = self._unique_session_name_for_session(session, port_name)
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
-        self.tabs.setTabText(0, session.name)
+        self._update_session_tab(session)
         self._set_status("")
         self._on_auto_send_toggle()
 
@@ -1669,7 +1693,7 @@ class SerialDebugQtTool(QMainWindow):
         session.name = self._unique_session_name_for_session(session, label)
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
-        self.tabs.setTabText(0, session.name)
+        self._update_session_tab(session)
         self._set_status("")
         self._on_auto_send_toggle()
 
@@ -1681,7 +1705,7 @@ class SerialDebugQtTool(QMainWindow):
 
     def disconnect_serial(self, session: ConnectionSession) -> None:
         was_connected = session.is_connected
-        if was_connected:
+        if was_connected and session.id == self.active_session_id:
             self.stop_auto_send()
         session.stop_event.set()
         port = session.serial_port
@@ -1696,13 +1720,13 @@ class SerialDebugQtTool(QMainWindow):
         self._update_session_tree_status(session)
         if session.id == self.active_session_id:
             self._set_connected_state(False)
-            self.tabs.setTabText(0, session.name)
+            self._update_session_tab(session)
         if was_connected:
             self._set_status("")
 
     def disconnect_network(self, session: ConnectionSession) -> None:
         was_connected = session.is_connected
-        if was_connected:
+        if was_connected and session.id == self.active_session_id:
             self.stop_auto_send()
         session.stop_event.set()
         for sock_name in ("tcp_socket", "tcp_server_socket", "udp_socket"):
@@ -1727,7 +1751,7 @@ class SerialDebugQtTool(QMainWindow):
         self._update_session_tree_status(session)
         if session.id == self.active_session_id:
             self._set_connected_state(False)
-            self.tabs.setTabText(0, session.name)
+            self._update_session_tab(session)
         if was_connected:
             self._set_status("")
 
@@ -1877,14 +1901,14 @@ class SerialDebugQtTool(QMainWindow):
         recv_timestamp = self._log_timestamp()
         sent_timestamp, sent_data = self._take_pending_send_record(session)
         if not self.pause_display_check.isChecked():
-            self._append_table_row(self.receive_table, sent_timestamp, sent_data, recv_timestamp, session.name, display)
+            self._append_receive_record(sent_timestamp, sent_data, recv_timestamp, session.name, display)
         if self.realtime_save_check.isChecked():
             self._append_realtime_file(self._format_record_for_file(sent_timestamp, sent_data, recv_timestamp, session.name, display))
 
     def _append_system_message(self, session: ConnectionSession, text: str) -> None:
         timestamp = self._log_timestamp()
         if not self.pause_display_check.isChecked():
-            self._append_table_row(self.receive_table, "", "", timestamp, session.name, text)
+            self._append_receive_record("", "", timestamp, session.name, text)
         if self.realtime_save_check.isChecked():
             self._append_realtime_file(self._format_record_for_file("", "", timestamp, session.name, text))
 
@@ -1900,20 +1924,8 @@ class SerialDebugQtTool(QMainWindow):
             return "", ""
         return records.popleft()
 
-    def _append_table_row(self, table: QTableWidget, *values: str) -> None:
-        row = table.rowCount()
-        table.insertRow(row)
-        for col, text in enumerate(values):
-            item = QTableWidgetItem(text)
-            item.setToolTip(text)
-            if col in getattr(table, "mono_columns", set()) and hasattr(table, "data_font"):
-                item.setFont(table.data_font)
-            table.setItem(row, col, item)
-        table.resizeRowToContents(row)
-        default_height = getattr(table, "default_row_height", 20)
-        if table.rowHeight(row) < default_height:
-            table.setRowHeight(row, default_height)
-        table.scrollToBottom()
+    def _append_receive_record(self, sent_timestamp: str, sent_data: str, recv_timestamp: str, connection: str, data: str) -> None:
+        self.receive_log.append_record(sent_timestamp, sent_data, recv_timestamp, connection, data)
 
     def _format_sent_data(self, data: bytes) -> str:
         if self.hex_send_check.isChecked():
@@ -2103,7 +2115,7 @@ class SerialDebugQtTool(QMainWindow):
         self.send_edit.clear()
 
     def clear_receive(self) -> None:
-        self.receive_table.setRowCount(0)
+        self.receive_log.clear()
 
     def clear_counts(self) -> None:
         session = self.active_session
@@ -2123,7 +2135,7 @@ class SerialDebugQtTool(QMainWindow):
         if not path:
             return
         try:
-            Path(path).write_text(self._table_log_text(self.receive_table), encoding="utf-8")
+            Path(path).write_text(self.receive_log.to_log_text(), encoding="utf-8")
             self._set_status(f"已保存到 {path}")
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", str(exc))
@@ -2172,16 +2184,6 @@ class SerialDebugQtTool(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "清除配置失败", str(exc))
 
-    def _table_log_text(self, table: QTableWidget) -> str:
-        lines: list[str] = []
-        for row in range(table.rowCount()):
-            values = []
-            for col in range(table.columnCount()):
-                item = table.item(row, col)
-                values.append(item.text() if item is not None else "")
-            lines.append("\t".join(values).rstrip())
-        return "\n".join(lines)
-
     def _format_record_for_file(self, sent_timestamp: str, sent_data: str, recv_timestamp: str, connection: str, data: str) -> str:
         return f"{sent_timestamp}\t{sent_data}\t{recv_timestamp}\t{connection}\t{data}\n"
 
@@ -2193,7 +2195,7 @@ class SerialDebugQtTool(QMainWindow):
             text = "关闭连接" if connected else "打开连接"
         self.connect_btn.setText(text)
         if mode != MODE_SERIAL:
-            self.create_btn.setEnabled(not connected)
+            self.create_btn.setEnabled(True)
             self.connect_btn.setEnabled(self.active_session is not None)
         self._refresh_status_summary()
 
@@ -2209,6 +2211,7 @@ class SerialDebugQtTool(QMainWindow):
         if item is not None:
             item.setText(0, session.name)
             item.setIcon(0, self._session_status_icon(session))
+        self._update_session_tab(session)
 
     def _apply_line_state(self, session: ConnectionSession | None = None) -> None:
         session = session or self.active_session
