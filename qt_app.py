@@ -5,6 +5,7 @@ import queue
 import re
 import socket
 import threading
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -101,15 +102,23 @@ THEME = {
 
 
 class EmptyTable(QTableWidget):
-    def __init__(self, empty_text: str = "暂无数据", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        headers: tuple[str, ...] = ("时间", "连接", "数据"),
+        fixed_widths: tuple[int, ...] = (132, 176),
+        mono_columns: tuple[int, ...] = (2,),
+        empty_text: str = "暂无数据",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self.mono_columns = set(mono_columns)
         self.empty_text = empty_text
         self.data_font = QFont("Consolas")
         self.data_font.setStyleHint(QFont.StyleHint.Monospace)
-        self.setColumnCount(3)
-        self.setHorizontalHeaderLabels(("时间", "连接", "数据"))
+        self.setColumnCount(len(headers))
+        self.setHorizontalHeaderLabels(headers)
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(30)
+        self.verticalHeader().setDefaultSectionSize(24)
         self.setShowGrid(False)
         self.setAlternatingRowColors(False)
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -118,11 +127,14 @@ class EmptyTable(QTableWidget):
         self.setWordWrap(False)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         header = self.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.setColumnWidth(0, 132)
-        self.setColumnWidth(1, 176)
+        stretch_col = max(0, len(headers) - 1)
+        for col, width in enumerate(fixed_widths):
+            if col >= len(headers):
+                break
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+            self.setColumnWidth(col, width)
+        for col in range(len(fixed_widths), len(headers)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == stretch_col else QHeaderView.ResizeMode.Fixed)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -172,6 +184,7 @@ class SerialDebugQtTool(QMainWindow):
         self.sessions: dict[int, ConnectionSession] = {}
         self.mode_root_items: dict[str, QTreeWidgetItem] = {}
         self.session_items: dict[int, QTreeWidgetItem] = {}
+        self.pending_send_records: dict[int, deque[tuple[str, str]]] = {}
         self.next_session_id = 1
         self.active_session_id: int | None = None
         self.mode = MODE_SERIAL
@@ -463,7 +476,7 @@ class SerialDebugQtTool(QMainWindow):
         }}
         QTableWidget::item {{
             border: 0;
-            padding: 5px 8px;
+            padding: 2px 6px;
         }}
         QTableWidget::item:selected {{
             background: {THEME["accent_soft"]};
@@ -848,17 +861,13 @@ class SerialDebugQtTool(QMainWindow):
         file_row.addWidget(self.send_file_btn)
         layout.addLayout(file_row)
 
-        self.send_table = EmptyTable()
-        self.send_table.setMinimumHeight(168)
-        layout.addWidget(self.send_table, 1)
         input_label = QLabel("发送内容")
         input_label.setProperty("muted", True)
         layout.addWidget(input_label)
         self.send_edit = QTextEdit()
         self.send_edit.setPlaceholderText("在此输入要发送的数据...")
-        self.send_edit.setMinimumHeight(72)
-        self.send_edit.setMaximumHeight(108)
-        layout.addWidget(self.send_edit)
+        self.send_edit.setMinimumHeight(180)
+        layout.addWidget(self.send_edit, 1)
         self._toggle_file_send_controls()
         self._toggle_crc_controls()
         return card
@@ -902,7 +911,11 @@ class SerialDebugQtTool(QMainWindow):
         realtime_row.addWidget(realtime_btn)
         layout.addLayout(realtime_row)
 
-        self.receive_table = EmptyTable()
+        self.receive_table = EmptyTable(
+            headers=("发送时间", "发送内容", "接收时间", "连接", "接收数据"),
+            fixed_widths=(108, 240, 108, 170),
+            mono_columns=(1, 4),
+        )
         self.receive_table.setMinimumHeight(200)
         layout.addWidget(self.receive_table, 1)
         return card
@@ -1136,6 +1149,7 @@ class SerialDebugQtTool(QMainWindow):
             self.realtime_edit.setText(str(receive_config.get("realtime_path", "")))
 
             self.sessions.clear()
+            self.pending_send_records.clear()
             self.next_session_id = 1
             self.active_session_id = None
             self._load_configured_sessions(data)
@@ -1438,6 +1452,7 @@ class SerialDebugQtTool(QMainWindow):
         if session.is_connected:
             self.disconnect_session(session)
         self.sessions.pop(session.id, None)
+        self.pending_send_records.pop(session.id, None)
         self.active_session_id = None
         self._rebuild_connection_tree()
         self._update_counts()
@@ -1858,31 +1873,39 @@ class SerialDebugQtTool(QMainWindow):
         display = self._format_received_data(data)
         if not display:
             return
-        timestamp = self._log_timestamp()
+        recv_timestamp = self._log_timestamp()
+        sent_timestamp, sent_data = self._take_pending_send_record(session)
         if not self.pause_display_check.isChecked():
-            self._append_table_row(self.receive_table, timestamp, session.name, display)
+            self._append_table_row(self.receive_table, sent_timestamp, sent_data, recv_timestamp, session.name, display)
         if self.realtime_save_check.isChecked():
-            self._append_realtime_file(self._format_record_for_file(timestamp, session.name, display))
+            self._append_realtime_file(self._format_record_for_file(sent_timestamp, sent_data, recv_timestamp, session.name, display))
 
     def _append_system_message(self, session: ConnectionSession, text: str) -> None:
         timestamp = self._log_timestamp()
         if not self.pause_display_check.isChecked():
-            self._append_table_row(self.receive_table, timestamp, session.name, text)
+            self._append_table_row(self.receive_table, "", "", timestamp, session.name, text)
         if self.realtime_save_check.isChecked():
-            self._append_realtime_file(self._format_record_for_file(timestamp, session.name, text))
+            self._append_realtime_file(self._format_record_for_file("", "", timestamp, session.name, text))
 
-    def _append_sent_data(self, session: ConnectionSession, data: bytes) -> None:
+    def _remember_sent_data(self, session: ConnectionSession, data: bytes) -> None:
         display = self._format_sent_data(data)
         if display:
-            self._append_table_row(self.send_table, self._log_timestamp(), session.name, display)
+            records = self.pending_send_records.setdefault(session.id, deque())
+            records.append((self._log_timestamp(), display))
 
-    def _append_table_row(self, table: QTableWidget, timestamp: str, connection: str, data: str) -> None:
+    def _take_pending_send_record(self, session: ConnectionSession) -> tuple[str, str]:
+        records = self.pending_send_records.get(session.id)
+        if not records:
+            return "", ""
+        return records.popleft()
+
+    def _append_table_row(self, table: QTableWidget, *values: str) -> None:
         row = table.rowCount()
         table.insertRow(row)
-        for col, text in enumerate((timestamp, connection, data)):
+        for col, text in enumerate(values):
             item = QTableWidgetItem(text)
             item.setToolTip(text)
-            if col == 2 and hasattr(table, "data_font"):
+            if col in getattr(table, "mono_columns", set()) and hasattr(table, "data_font"):
                 item.setFont(table.data_font)
             table.setItem(row, col, item)
         table.scrollToBottom()
@@ -1922,7 +1945,7 @@ class SerialDebugQtTool(QMainWindow):
             written, target_text = self._write_payload(session, data)
             if crc_appended and should_update_send_area:
                 self._write_full_payload_to_send_area(data)
-            self._append_sent_data(session, data)
+            self._remember_sent_data(session, data)
             session.sent_bytes += written
             self._update_counts()
             crc_text = "，已自动追加CRC" if crc_appended else ""
@@ -2073,7 +2096,6 @@ class SerialDebugQtTool(QMainWindow):
 
     def clear_send(self) -> None:
         self.send_edit.clear()
-        self.send_table.setRowCount(0)
 
     def clear_receive(self) -> None:
         self.receive_table.setRowCount(0)
@@ -2155,8 +2177,8 @@ class SerialDebugQtTool(QMainWindow):
             lines.append("\t".join(values).rstrip())
         return "\n".join(lines)
 
-    def _format_record_for_file(self, timestamp: str, connection: str, data: str) -> str:
-        return f"{timestamp}\t{connection}\t{data}\n"
+    def _format_record_for_file(self, sent_timestamp: str, sent_data: str, recv_timestamp: str, connection: str, data: str) -> str:
+        return f"{sent_timestamp}\t{sent_data}\t{recv_timestamp}\t{connection}\t{data}\n"
 
     def _set_connected_state(self, connected: bool) -> None:
         mode = self.active_session.mode if self.active_session is not None else self.mode
