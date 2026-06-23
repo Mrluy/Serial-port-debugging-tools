@@ -135,6 +135,7 @@ class SelectableLogEdit(QTextEdit):
         self.setReadOnly(True)
         self.setAcceptRichText(True)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         data_font = QFont("Consolas")
         data_font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(data_font)
