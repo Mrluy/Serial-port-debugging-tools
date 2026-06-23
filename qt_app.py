@@ -127,6 +127,7 @@ class TickCheckBox(QCheckBox):
 
 class SelectableLogEdit(QTextEdit):
     HEADERS = ("发送时间", "发送内容", "接收时间", "连接", "接收数据")
+    COLUMN_WIDTHS = ("13%", "25%", "13%", "18%", "31%")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -169,14 +170,23 @@ class SelectableLogEdit(QTextEdit):
         return "\n".join(lines)
 
     def _render(self, *, scroll_to_bottom: bool = False) -> None:
-        header_html = "".join(f"<th>{self._cell_text(title)}</th>" for title in self.HEADERS)
+        header_html = "".join(
+            f'<th width="{width}">{self._cell_text(title)}</th>'
+            for title, width in zip(self.HEADERS, self.COLUMN_WIDTHS)
+        )
         if self.records:
             rows_html = "\n".join(
-                "<tr>" + "".join(f"<td>{self._cell_text(value)}</td>" for value in record) + "</tr>"
+                "<tr>"
+                + "".join(
+                    f'<td width="{width}">{self._cell_text(value)}</td>'
+                    for value, width in zip(record, self.COLUMN_WIDTHS)
+                )
+                + "</tr>"
                 for record in self.records
             )
         else:
             rows_html = '<tr><td class="empty" colspan="5">暂无数据</td></tr>'
+        colgroup_html = "".join(f'<col width="{width}">' for width in self.COLUMN_WIDTHS)
         self.setHtml(
             f"""
             <!doctype html>
@@ -193,7 +203,6 @@ class SelectableLogEdit(QTextEdit):
             table {{
                 width: 100%;
                 border-collapse: collapse;
-                table-layout: fixed;
             }}
             th {{
                 background: {THEME["table_header"]};
@@ -212,10 +221,6 @@ class SelectableLogEdit(QTextEdit):
                 vertical-align: top;
                 white-space: pre-wrap;
             }}
-            th:nth-child(1), td:nth-child(1) {{ width: 108px; }}
-            th:nth-child(2), td:nth-child(2) {{ width: 240px; }}
-            th:nth-child(3), td:nth-child(3) {{ width: 108px; }}
-            th:nth-child(4), td:nth-child(4) {{ width: 170px; }}
             td.empty {{
                 color: {THEME["disabled"]};
                 text-align: center;
@@ -225,7 +230,8 @@ class SelectableLogEdit(QTextEdit):
             </style>
             </head>
             <body>
-            <table>
+            <table width="100%">
+                <colgroup>{colgroup_html}</colgroup>
                 <thead><tr>{header_html}</tr></thead>
                 <tbody>{rows_html}</tbody>
             </table>
