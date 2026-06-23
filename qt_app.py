@@ -377,16 +377,16 @@ class SerialDebugQtTool(QMainWindow):
             background: {THEME["input"]};
             color: {THEME["text"]};
             border: 1px solid {THEME["border"]};
-            border-radius: 6px;
-            min-height: 24px;
-            padding: 4px 8px;
+            border-radius: 5px;
+            min-height: 17px;
+            padding: 2px 6px;
             selection-background-color: {THEME["accent"]};
         }}
         QComboBox, QSpinBox {{
             min-width: 74px;
         }}
         QTextEdit {{
-            padding: 8px;
+            padding: 6px;
         }}
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {{
             border-color: {THEME["accent"]};
@@ -397,7 +397,7 @@ class SerialDebugQtTool(QMainWindow):
         }}
         QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button {{
             border: 0;
-            width: 22px;
+            width: 18px;
         }}
         QComboBox QAbstractItemView {{
             background: {THEME["card"]};
@@ -447,8 +447,8 @@ class SerialDebugQtTool(QMainWindow):
         }}
         QPushButton#IconButton {{
             min-width: 32px;
-            padding-left: 9px;
-            padding-right: 9px;
+            padding-left: 7px;
+            padding-right: 7px;
         }}
         QCheckBox {{
             spacing: 6px;
@@ -808,12 +808,12 @@ class SerialDebugQtTool(QMainWindow):
         card = QFrame()
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 10, 14, 12)
-        layout.setSpacing(7)
+        layout.setContentsMargins(14, 8, 14, 9)
+        layout.setSpacing(4)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(10)
+        header.setSpacing(7)
         header.addWidget(self._section_label("发送区"))
         self.hex_send_check = TickCheckBox("16进制")
         self.append_crlf_check = TickCheckBox("追加CRLF")
@@ -841,7 +841,7 @@ class SerialDebugQtTool(QMainWindow):
 
         file_row = QHBoxLayout()
         file_row.setContentsMargins(0, 0, 0, 0)
-        file_row.setSpacing(8)
+        file_row.setSpacing(5)
         self.send_file_check = TickCheckBox("发送文件")
         self.auto_send_check = TickCheckBox("自动发送")
         self.interval_spin = QSpinBox()
@@ -854,7 +854,7 @@ class SerialDebugQtTool(QMainWindow):
         file_row.addWidget(QLabel("间隔"))
         file_row.addWidget(self.interval_spin)
         file_row.addWidget(QLabel("ms"))
-        file_row.addSpacing(6)
+        file_row.addSpacing(2)
         file_label = QLabel("文件:")
         file_label.setProperty("muted", True)
         file_row.addWidget(file_label)
@@ -881,12 +881,12 @@ class SerialDebugQtTool(QMainWindow):
         card = QFrame()
         card.setObjectName("Card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 10, 14, 12)
-        layout.setSpacing(7)
+        layout.setContentsMargins(14, 8, 14, 9)
+        layout.setSpacing(4)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(10)
+        header.setSpacing(7)
         header.addWidget(self._section_label("接收区"))
         header.addStretch(1)
         self.pause_display_check = TickCheckBox("暂停显示")
@@ -905,7 +905,7 @@ class SerialDebugQtTool(QMainWindow):
 
         realtime_row = QHBoxLayout()
         realtime_row.setContentsMargins(0, 0, 0, 0)
-        realtime_row.setSpacing(8)
+        realtime_row.setSpacing(5)
         self.realtime_save_check = TickCheckBox("保存到文件(实时)")
         self.realtime_edit = QLineEdit()
         realtime_btn = self._button("...")
