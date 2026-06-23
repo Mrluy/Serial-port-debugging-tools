@@ -1293,7 +1293,7 @@ class SerialDebugQtTool(QMainWindow):
             self._update_mode_controls()
             self._set_connected_state(False)
             self._update_counts()
-            self._set_status(f"当前模式：{self.mode}")
+            self._set_status("")
             self._schedule_config_save()
             return
         session = self.sessions.get(int(data.get("id", -1)))
@@ -1306,7 +1306,7 @@ class SerialDebugQtTool(QMainWindow):
         self._set_connected_state(session.is_connected)
         self._update_counts()
         self.tabs.setTabText(0, session.name)
-        self._set_status(f"当前连接：{session.name}")
+        self._set_status("")
         self._schedule_config_save()
 
     def _show_connection_context_menu(self, point: QPoint) -> None:
@@ -1628,7 +1628,7 @@ class SerialDebugQtTool(QMainWindow):
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
         self.tabs.setTabText(0, session.name)
-        self._set_status(f"{port_name} 已打开")
+        self._set_status("")
         self._on_auto_send_toggle()
 
     def connect_network(self, session: ConnectionSession) -> None:
@@ -1646,7 +1646,6 @@ class SerialDebugQtTool(QMainWindow):
                 session.threads.append(thread)
                 thread.start()
                 label = f"{host}:{port}"
-                status_label = f"TCP客户端 {label}"
             elif mode == MODE_TCP_SERVER:
                 host, port = self._local_endpoint(session)
                 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1660,7 +1659,6 @@ class SerialDebugQtTool(QMainWindow):
                 thread.start()
                 actual_host, actual_port = server.getsockname()
                 label = f"本机:{actual_port}"
-                status_label = f"TCP服务端 {actual_host}:{actual_port}"
             elif mode == MODE_UDP_CLIENT:
                 host, port = self._remote_endpoint(session)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1672,7 +1670,6 @@ class SerialDebugQtTool(QMainWindow):
                 session.threads.append(thread)
                 thread.start()
                 label = f"{host}:{port}"
-                status_label = f"UDP客户端 {label}"
             elif mode == MODE_UDP_SERVER:
                 host, port = self._local_endpoint(session)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1684,7 +1681,6 @@ class SerialDebugQtTool(QMainWindow):
                 thread.start()
                 actual_host, actual_port = sock.getsockname()
                 label = f"本机:{actual_port}"
-                status_label = f"UDP服务端 {actual_host}:{actual_port}"
             else:
                 raise ValueError("未知连接模式")
         except Exception as exc:
@@ -1696,7 +1692,7 @@ class SerialDebugQtTool(QMainWindow):
         self._set_connected_state(session.is_connected)
         self._update_session_tree_status(session)
         self.tabs.setTabText(0, session.name)
-        self._set_status(f"{status_label} 已打开")
+        self._set_status("")
         self._on_auto_send_toggle()
 
     def disconnect_session(self, session: ConnectionSession) -> None:
@@ -1724,7 +1720,7 @@ class SerialDebugQtTool(QMainWindow):
             self._set_connected_state(False)
             self.tabs.setTabText(0, session.name)
         if was_connected:
-            self._set_status(f"{session.name} 已关闭")
+            self._set_status("")
 
     def disconnect_network(self, session: ConnectionSession) -> None:
         was_connected = session.is_connected
@@ -1755,7 +1751,7 @@ class SerialDebugQtTool(QMainWindow):
             self._set_connected_state(False)
             self.tabs.setTabText(0, session.name)
         if was_connected:
-            self._set_status(f"{session.name} 已关闭")
+            self._set_status("")
 
     def _remote_endpoint(self, session: ConnectionSession | None = None) -> tuple[str, int]:
         config = session.config if session is not None else None
