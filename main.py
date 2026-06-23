@@ -26,13 +26,13 @@ except ImportError:
 
 
 APP_NAME = "COM/TCP/UDP调试工具"
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.1.0"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 APP_ICON_PATH = Path("assets") / "app.png"
 CONFIG_DIR_NAME = "Serial-port-debugging-tools"
 CONFIG_FILE_NAME = "config.json"
 CONFIG_SCHEMA_VERSION = 1
-DEFAULT_GEOMETRY = "1420x900"
+DEFAULT_GEOMETRY = "1536x960"
 DEFAULT_LEFT_PANEL_WIDTH = 320
 UI_FONT_FAMILY = "Microsoft YaHei UI"
 MONO_FONT_FAMILY = "Consolas"
@@ -2831,8 +2831,12 @@ class SerialDebugTool(tk.Tk):
 
 
 def main() -> None:
-    app = SerialDebugTool()
-    app.mainloop()
+    try:
+        from qt_app import run
+    except ImportError as exc:
+        messagebox.showerror("缺少运行依赖", f"请先执行：python -m pip install -r requirements.txt\n\n{exc}")
+        return
+    run()
 
 
 if __name__ == "__main__":

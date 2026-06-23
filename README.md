@@ -2,7 +2,7 @@
 
 一个面向 Windows 的本地调试工具，支持 COM 串口、TCP 客户端、TCP 服务端、UDP 客户端、UDP 服务端收发测试。项目提供免安装单文件 EXE，目标电脑无需安装 Python 或额外运行环境。
 
-当前版本：`v1.0.7`
+当前版本：`v1.1.0`
 
 ## 适用场景
 
@@ -10,7 +10,7 @@
 - TCP/UDP 设备、网关、服务器、本地端口监听测试
 - 文本数据与 16 进制数据互转发送
 - 通信日志查看、保存和实时落盘
-- 现代暗色主题界面，适合长时间调试和开发场景
+- 基于 PySide6/Qt 的现代暗色主题界面，适合长时间调试和开发场景
 
 ## 主要功能
 
@@ -38,7 +38,7 @@
 
 ## 界面布局
 
-`v1.0.7` 起默认使用更接近现代调试器的深蓝黑暗色主题。主窗口顶部提供应用标题和菜单入口，左侧是连接列表、串口或网络参数、计数区；右侧是当前会话标签页、发送区和接收区。
+`v1.1.0` 起界面迁移为 PySide6/Qt 实现，默认使用更接近现代调试器的深蓝黑暗色主题。主窗口顶部提供应用标题和菜单入口，左侧是连接列表、串口或网络参数、计数区；右侧是当前会话标签页、发送区和接收区。
 
 发送区和接收区都按 `时间 / 连接 / 数据` 分列显示记录。发送区上方保留 16 进制、追加 CRLF、自动 CRC、文件发送、自动发送、发送、停止和清空等原有控件；接收区保留暂停显示、清空、保存、16 进制显示和实时保存到文件。
 
@@ -56,7 +56,7 @@ dist\COM串口调试工具.exe
 
 ## 从源码运行
 
-开发环境需要安装 Python 3.10 或更高版本。
+开发环境需要安装 Python 3.10 或更高版本。源码运行依赖 `pyserial` 和 `PySide6`。
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -176,7 +176,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name "COM串口
 提交前可以运行：
 
 ```powershell
-python -m py_compile main.py tools\make_icon.py
+python -m py_compile main.py qt_app.py tools\make_icon.py
 python -m unittest discover -s tests
 ```
 
@@ -184,7 +184,8 @@ python -m unittest discover -s tests
 
 ```text
 .
-├─ main.py                  # 主程序
+├─ main.py                  # 启动入口和协议/配置工具函数
+├─ qt_app.py                # PySide6/Qt 主界面和通信调试逻辑
 ├─ requirements.txt         # 运行依赖
 ├─ start.bat                # 源码启动脚本
 ├─ build_exe.bat            # EXE 打包脚本
